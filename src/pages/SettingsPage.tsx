@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import type { RiskTolerance } from '@/lib/types';
-import { Cog, Save, RotateCcw, AlertTriangle, X, Check, User, Shield, Calendar } from 'lucide-react';
+import { Cog, Save, RotateCcw, AlertTriangle, X, Check, User, Shield, Calendar, KeyRound, Trash2, Coins, Landmark } from 'lucide-react';
 
 const RISKS: { id: RiskTolerance; label: string; desc: string }[] = [
   { id: 'low', label: 'Low', desc: 'Capital preservation' },
@@ -115,6 +115,9 @@ export function SettingsPage() {
         </div>
       </div>
 
+      {/* Broker API keys section */}
+      <BrokerCredentials />
+
       {/* Account info section */}
       <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-4">
         <div className="flex items-center gap-2">
@@ -176,6 +179,258 @@ export function SettingsPage() {
             refreshProfile();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+type BrokerStatus = { broker: string; is_active: boolean; updated_at: string };
+
+function BrokerCredentials() {
+  const [statuses, setStatuses] = useState<BrokerStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openForm, setOpenForm] = useState<'coindcx' | 'fivepaisa' | null>(null);
+  const [busyBroker, setBusyBroker] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const [coindcxKey, setCoindcxKey] = useState('');
+  const [coindcxSecret, setCoindcxSecret] = useState('');
+
+  const [fpClientCode, setFpClientCode] = useState('');
+  const [fpPin, setFpPin] = useState('');
+  const [fpTotpSecret, setFpTotpSecret] = useState('');
+  const [fpUserId, setFpUserId] = useState('');
+  const [fpUserKey, setFpUserKey] = useState('');
+  const [fpEncryptionKey, setFpEncryptionKey] = useState('');
+  const [fpAppSource, setFpAppSource] = useState('');
+
+  const loadStatus = useCallback(async () => {
+    setLoading(true);
+    const { data, error: fnError } = await supabase.functions.invoke('manage-broker-credentials', {
+      body: { action: 'status' },
+    });
+    setLoading(false);
+    if (fnError) {
+      setError(fnError.message);
+      return;
+    }
+    setStatuses((data?.brokers ?? []) as BrokerStatus[]);
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  const isConnected = (broker: string) => statuses.some((s) => s.broker === broker && s.is_active);
+
+  const saveCoindcx = async () => {
+    setBusyBroker('coindcx');
+    setError(null);
+    setMessage(null);
+    const { data, error: fnError } = await supabase.functions.invoke('manage-broker-credentials', {
+      body: {
+        action: 'save',
+        broker: 'coindcx',
+        credentials: { api_key: coindcxKey.trim(), api_secret: coindcxSecret.trim() },
+      },
+    });
+    setBusyBroker(null);
+    if (fnError || !data?.success) {
+      setError(fnError?.message ?? data?.error ?? 'Failed to save CoinDCX keys');
+      return;
+    }
+    setCoindcxKey('');
+    setCoindcxSecret('');
+    setOpenForm(null);
+    setMessage('CoinDCX keys saved.');
+    loadStatus();
+  };
+
+  const saveFivepaisa = async () => {
+    setBusyBroker('fivepaisa');
+    setError(null);
+    setMessage(null);
+    const { data, error: fnError } = await supabase.functions.invoke('manage-broker-credentials', {
+      body: {
+        action: 'save',
+        broker: 'fivepaisa',
+        credentials: {
+          client_code: fpClientCode.trim(),
+          pin: fpPin.trim(),
+          totp_secret: fpTotpSecret.trim(),
+          user_id: fpUserId.trim(),
+          user_key: fpUserKey.trim(),
+          encryption_key: fpEncryptionKey.trim(),
+          app_source: fpAppSource.trim(),
+        },
+      },
+    });
+    setBusyBroker(null);
+    if (fnError || !data?.success) {
+      setError(fnError?.message ?? data?.error ?? 'Failed to save 5paisa keys');
+      return;
+    }
+    setFpClientCode('');
+    setFpPin('');
+    setFpTotpSecret('');
+    setFpUserId('');
+    setFpUserKey('');
+    setFpEncryptionKey('');
+    setFpAppSource('');
+    setOpenForm(null);
+    setMessage('5paisa keys saved.');
+    loadStatus();
+  };
+
+  const disconnect = async (broker: 'coindcx' | 'fivepaisa') => {
+    setBusyBroker(broker);
+    setError(null);
+    const { data, error: fnError } = await supabase.functions.invoke('manage-broker-credentials', {
+      body: { action: 'delete', broker },
+    });
+    setBusyBroker(null);
+    if (fnError || !data?.success) {
+      setError(fnError?.message ?? data?.error ?? 'Failed to remove keys');
+      return;
+    }
+    setMessage(`${broker === 'coindcx' ? 'CoinDCX' : '5paisa'} keys removed.`);
+    loadStatus();
+  };
+
+  return (
+    <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-5">
+      <div className="flex items-center gap-2">
+        <KeyRound className="w-4 h-4 text-amber-400" />
+        <h2 className="text-sm font-semibold text-white">Broker API Keys</h2>
+      </div>
+      <p className="text-xs text-slate-500 -mt-3">
+        Keys are saved directly to the database at runtime through a secured function — never committed
+        to code or git. Used only when a strategy's Execution Target is set to a live broker.
+      </p>
+
+      {error && (
+        <p className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2.5">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p className="text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2.5">
+          {message}
+        </p>
+      )}
+
+      {!loading && (
+        <>
+          {/* CoinDCX */}
+          <div className="border border-slate-800 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Coins className="w-4 h-4 text-amber-400" />
+                <span className="text-sm font-medium text-white">CoinDCX</span>
+                {isConnected('coindcx') && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Connected
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {isConnected('coindcx') && (
+                  <button
+                    onClick={() => disconnect('coindcx')}
+                    disabled={busyBroker === 'coindcx'}
+                    className="text-xs text-rose-400 hover:text-rose-300 inline-flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remove
+                  </button>
+                )}
+                <button
+                  onClick={() => setOpenForm(openForm === 'coindcx' ? null : 'coindcx')}
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  {isConnected('coindcx') ? 'Update keys' : 'Add keys'}
+                </button>
+              </div>
+            </div>
+            {openForm === 'coindcx' && (
+              <div className="space-y-2 pt-1">
+                <input
+                  type="text"
+                  value={coindcxKey}
+                  onChange={(e) => setCoindcxKey(e.target.value)}
+                  placeholder="API Key"
+                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+                />
+                <input
+                  type="password"
+                  value={coindcxSecret}
+                  onChange={(e) => setCoindcxSecret(e.target.value)}
+                  placeholder="API Secret"
+                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-amber-500 transition"
+                />
+                <button
+                  onClick={saveCoindcx}
+                  disabled={busyBroker === 'coindcx' || !coindcxKey || !coindcxSecret}
+                  className="w-full bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 font-medium text-sm py-2 rounded-lg transition disabled:opacity-50"
+                >
+                  {busyBroker === 'coindcx' ? 'Saving…' : 'Save CoinDCX Keys'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 5paisa */}
+          <div className="border border-slate-800 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Landmark className="w-4 h-4 text-rose-400" />
+                <span className="text-sm font-medium text-white">5paisa</span>
+                {isConnected('fivepaisa') && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Connected
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {isConnected('fivepaisa') && (
+                  <button
+                    onClick={() => disconnect('fivepaisa')}
+                    disabled={busyBroker === 'fivepaisa'}
+                    className="text-xs text-rose-400 hover:text-rose-300 inline-flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remove
+                  </button>
+                )}
+                <button
+                  onClick={() => setOpenForm(openForm === 'fivepaisa' ? null : 'fivepaisa')}
+                  className="text-xs text-sky-400 hover:text-sky-300"
+                >
+                  {isConnected('fivepaisa') ? 'Update keys' : 'Add keys'}
+                </button>
+              </div>
+            </div>
+            {openForm === 'fivepaisa' && (
+              <div className="space-y-2 pt-1">
+                <input type="text" value={fpClientCode} onChange={(e) => setFpClientCode(e.target.value)} placeholder="Client Code" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="password" value={fpPin} onChange={(e) => setFpPin(e.target.value)} placeholder="PIN" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="password" value={fpTotpSecret} onChange={(e) => setFpTotpSecret(e.target.value)} placeholder="TOTP Secret (from Profile > TOTP setup)" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="text" value={fpUserId} onChange={(e) => setFpUserId(e.target.value)} placeholder="User ID (from Developer API keys)" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="password" value={fpUserKey} onChange={(e) => setFpUserKey(e.target.value)} placeholder="User Key" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="password" value={fpEncryptionKey} onChange={(e) => setFpEncryptionKey(e.target.value)} placeholder="Encryption Key" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <input type="text" value={fpAppSource} onChange={(e) => setFpAppSource(e.target.value)} placeholder="App Source (optional)" className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-rose-500 transition" />
+                <button
+                  onClick={saveFivepaisa}
+                  disabled={busyBroker === 'fivepaisa' || !fpClientCode || !fpPin || !fpTotpSecret}
+                  className="w-full bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 font-medium text-sm py-2 rounded-lg transition disabled:opacity-50"
+                >
+                  {busyBroker === 'fivepaisa' ? 'Saving…' : 'Save 5paisa Keys'}
+                </button>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

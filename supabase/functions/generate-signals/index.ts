@@ -861,9 +861,19 @@ async function executeStrategies(
       const signalId = signalsByAsset.get(assetId)?.[signalTerm];
       const tradeType = isBuy ? "long" : "short";
 
-      // Determine execution mode: testnet_live only for crypto assets on testnet strategies
+      // Determine execution mode based on strategy's execution_target.
+      // Each live broker only applies to the market type it actually supports:
+      // Binance testnet + CoinDCX -> crypto only, 5paisa -> stocks only.
       const isTestnet = strategy.execution_target === "testnet_live" && ind.asset.market_type === "crypto";
-      const executionMode = isTestnet ? "testnet_live" : "paper";
+      const isCoindcx = strategy.execution_target === "coindcx_live" && ind.asset.market_type === "crypto";
+      const isFivepaisa = strategy.execution_target === "fivepaisa_live" && ind.asset.market_type === "stocks";
+      const executionMode = isTestnet
+        ? "testnet_live"
+        : isCoindcx
+        ? "coindcx_live"
+        : isFivepaisa
+        ? "fivepaisa_live"
+        : "paper";
 
       const tradeRow = {
         user_id: strategy.user_id,
@@ -904,11 +914,13 @@ async function executeStrategies(
           continue;
         }
 
-        // If testnet mode, place the order on Binance testnet
-        if (isTestnet) {
+        // If a live broker mode, place the order with that broker
+        if (isTestnet || isCoindcx) {
+          const functionName = isTestnet ? "binance-testnet-trade" : "coindcx-trade";
+          const brokerLabel = isTestnet ? "Binance testnet" : "CoinDCX";
           try {
-            const binanceSide = isBuy ? "BUY" : "SELL";
-            const resp = await fetch(`${supabaseUrl}/functions/v1/binance-testnet-trade`, {
+            const orderSide = isBuy ? "BUY" : "SELL";
+            const resp = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -918,17 +930,21 @@ async function executeStrategies(
                 action: "place_order",
                 trade_id: insertedTrade.id,
                 symbol: ind.asset.symbol,
-                side: binanceSide,
+                side: orderSide,
                 quantity,
               }),
             });
             if (!resp.ok) {
               const errData = await resp.json().catch(() => ({}));
-              skipped.push(`${ind.asset.symbol}: Binance testnet error: ${errData.error ?? resp.statusText}`);
+              skipped.push(`${ind.asset.symbol}: ${brokerLabel} error: ${errData.error ?? resp.statusText}`);
             }
           } catch (e) {
-            skipped.push(`${ind.asset.symbol}: Binance testnet unreachable: ${e instanceof Error ? e.message : String(e)}`);
+            skipped.push(`${ind.asset.symbol}: ${brokerLabel} unreachable: ${e instanceof Error ? e.message : String(e)}`);
           }
+        } else if (isFivepaisa) {
+          // 5paisa needs a numeric ScripCode, not a plain symbol — until that mapping
+          // exists in the assets table, we skip live placement but keep the trade record.
+          skipped.push(`${ind.asset.symbol}: 5paisa live execution needs a ScripCode mapping (see fivepaisa-trade function notes) — trade recorded as pending live order`);
         }
         tradesCreated++;
       } else {

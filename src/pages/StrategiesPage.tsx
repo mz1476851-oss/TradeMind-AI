@@ -13,6 +13,8 @@ import {
   Check,
   Globe,
   FlaskConical,
+  Coins,
+  Landmark,
 } from 'lucide-react';
 
 const MARKET_OPTIONS: MarketType[] = ['stocks', 'crypto', 'forex'];
@@ -222,9 +224,19 @@ function StrategyCard({
         <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
           strategy.execution_target === 'testnet_live'
             ? 'border-violet-500/30 bg-violet-500/10 text-violet-400'
+            : strategy.execution_target === 'coindcx_live'
+            ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+            : strategy.execution_target === 'fivepaisa_live'
+            ? 'border-rose-500/30 bg-rose-500/10 text-rose-400'
             : 'border-slate-700 bg-slate-800/40 text-slate-400'
         }`}>
-          {strategy.execution_target === 'testnet_live' ? 'Binance Testnet' : 'Paper (Simulated)'}
+          {strategy.execution_target === 'testnet_live'
+            ? 'Binance Testnet'
+            : strategy.execution_target === 'coindcx_live'
+            ? 'CoinDCX (Live)'
+            : strategy.execution_target === 'fivepaisa_live'
+            ? '5paisa (Live)'
+            : 'Paper (Simulated)'}
         </span>
       </div>
 
@@ -479,12 +491,45 @@ function StrategyForm({
               <Globe className="w-4 h-4" />
               Binance Testnet
             </button>
+            <button
+              type="button"
+              onClick={() => setExecutionTarget('coindcx_live')}
+              className={`flex items-center justify-center gap-2 rounded-lg border py-2.5 text-sm font-medium transition ${
+                executionTarget === 'coindcx_live'
+                  ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                  : 'border-slate-700 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Coins className="w-4 h-4" />
+              CoinDCX (Live)
+            </button>
+            <button
+              type="button"
+              onClick={() => setExecutionTarget('fivepaisa_live')}
+              className={`flex items-center justify-center gap-2 rounded-lg border py-2.5 text-sm font-medium transition ${
+                executionTarget === 'fivepaisa_live'
+                  ? 'border-rose-500 bg-rose-500/10 text-rose-400'
+                  : 'border-slate-700 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Landmark className="w-4 h-4" />
+              5paisa (Live)
+            </button>
           </div>
           <p className="text-xs text-slate-500 mt-1.5">
             {executionTarget === 'testnet_live'
               ? 'Crypto trades execute on Binance Testnet (real exchange API, fake money). Non-crypto assets stay in paper mode.'
+              : executionTarget === 'coindcx_live'
+              ? 'Crypto trades execute on CoinDCX with REAL money using your saved CoinDCX keys (Settings page). Non-crypto assets stay in paper mode.'
+              : executionTarget === 'fivepaisa_live'
+              ? 'Stock trades execute on 5paisa with REAL money using your saved 5paisa keys (Settings page). Non-stock assets stay in paper mode.'
               : 'Trades are simulated internally — no external exchange calls.'}
           </p>
+          {(executionTarget === 'coindcx_live' || executionTarget === 'fivepaisa_live') && (
+            <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mt-2">
+              This mode trades with real money. Make sure you've added your {executionTarget === 'coindcx_live' ? 'CoinDCX' : '5paisa'} API keys in Settings and start with a small risk-per-trade.
+            </p>
+          )}
         </div>
 
         {error && (

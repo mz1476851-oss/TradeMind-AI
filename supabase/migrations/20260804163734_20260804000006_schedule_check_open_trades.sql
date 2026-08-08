@@ -27,7 +27,7 @@ SELECT cron.schedule(
   '*/5 * * * *',
   $$
     SELECT net.http_post(
-      url := 'https://fxzeupdttciduovmelod.supabase.co/functions/v1/check-open-trades',
+      url := 'https://ddtyutgxwesaofnmksvj.supabase.co/functions/v1/check-open-trades',
       headers := jsonb_build_object(
         'Content-Type', 'application/json'
       ),

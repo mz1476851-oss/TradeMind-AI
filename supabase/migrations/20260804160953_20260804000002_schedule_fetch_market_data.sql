@@ -40,7 +40,7 @@ SELECT cron.schedule(
   '*/10 * * * *',
   $$
     SELECT net.http_post(
-      url := 'https://fxzeupdttciduovmelod.supabase.co/functions/v1/fetch-market-data',
+      url := 'https://ddtyutgxwesaofnmksvj.supabase.co/functions/v1/fetch-market-data',
       headers := jsonb_build_object(
         'Content-Type', 'application/json'
       ),

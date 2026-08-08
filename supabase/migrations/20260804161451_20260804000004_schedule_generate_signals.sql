@@ -33,7 +33,7 @@ SELECT cron.schedule(
   '2-59/10 * * * *',
   $$
     SELECT net.http_post(
-      url := 'https://fxzeupdttciduovmelod.supabase.co/functions/v1/generate-signals',
+      url := 'https://ddtyutgxwesaofnmksvj.supabase.co/functions/v1/generate-signals',
       headers := jsonb_build_object(
         'Content-Type', 'application/json'
       ),

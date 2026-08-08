@@ -25,7 +25,8 @@ export interface Asset {
   name: string;
 }
 
-export type ExecutionTarget = 'paper' | 'testnet_live';
+export type ExecutionTarget = 'paper' | 'testnet_live' | 'coindcx_live' | 'fivepaisa_live';
+export type BrokerType = 'coindcx' | 'fivepaisa';
 
 export interface Strategy {
   id: string;
@@ -67,7 +68,7 @@ export interface StrategyAccuracy {
   calculated_at: string;
 }
 
-export type ExecutionMode = 'paper' | 'testnet_live';
+export type ExecutionMode = 'paper' | 'testnet_live' | 'coindcx_live' | 'fivepaisa_live';
 
 export interface Trade {
   id: string;
@@ -89,6 +90,8 @@ export interface Trade {
   pnl: number;
   execution_mode: ExecutionMode;
   broker_order_id: number | null;
+  broker: string | null;
+  broker_order_ref: string | null;
 }
 
 export interface PortfolioSnapshot {
