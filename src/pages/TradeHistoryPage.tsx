@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import type { Trade, Asset } from '@/lib/types';
-import { History, TrendingUp, TrendingDown, Clock, Globe } from 'lucide-react';
+import { History, TrendingUp, TrendingDown, Clock, Globe, Coins, Landmark } from 'lucide-react';
 
 export function TradeHistoryPage() {
   const { user } = useAuth();
@@ -146,6 +146,16 @@ export function TradeHistoryPage() {
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-violet-500/30 bg-violet-500/10 text-violet-400">
                           <Globe className="w-2.5 h-2.5" />
                           TESTNET
+                        </span>
+                      ) : t.execution_mode === 'coindcx_live' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-amber-500/30 bg-amber-500/10 text-amber-400">
+                          <Coins className="w-2.5 h-2.5" />
+                          COINDCX
+                        </span>
+                      ) : t.execution_mode === 'fivepaisa_live' ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-rose-500/30 bg-rose-500/10 text-rose-400">
+                          <Landmark className="w-2.5 h-2.5" />
+                          5PAISA
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border border-slate-600/40 bg-slate-700/30 text-slate-400">

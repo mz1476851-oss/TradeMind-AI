@@ -942,9 +942,33 @@ async function executeStrategies(
             skipped.push(`${ind.asset.symbol}: ${brokerLabel} unreachable: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else if (isFivepaisa) {
-          // 5paisa needs a numeric ScripCode, not a plain symbol — until that mapping
-          // exists in the assets table, we skip live placement but keep the trade record.
-          skipped.push(`${ind.asset.symbol}: 5paisa live execution needs a ScripCode mapping (see fivepaisa-trade function notes) — trade recorded as pending live order`);
+          if (!ind.asset.fivepaisa_scrip_code) {
+            skipped.push(`${ind.asset.symbol}: no 5paisa ScripCode mapped for this asset yet — set assets.fivepaisa_scrip_code to enable live execution. Trade recorded in paper mode.`);
+          } else {
+            try {
+              const orderSide = isBuy ? "BUY" : "SELL";
+              const resp = await fetch(`${supabaseUrl}/functions/v1/fivepaisa-trade`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${serviceKey}`,
+                },
+                body: JSON.stringify({
+                  action: "place_order",
+                  trade_id: insertedTrade.id,
+                  scrip_code: ind.asset.fivepaisa_scrip_code,
+                  side: orderSide,
+                  quantity,
+                }),
+              });
+              if (!resp.ok) {
+                const errData = await resp.json().catch(() => ({}));
+                skipped.push(`${ind.asset.symbol}: 5paisa error: ${errData.error ?? resp.statusText}`);
+              }
+            } catch (e) {
+              skipped.push(`${ind.asset.symbol}: 5paisa unreachable: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
         }
         tradesCreated++;
       } else {
@@ -992,7 +1016,7 @@ Deno.serve(async (req: Request) => {
     // Load all assets
     const { data: assets, error: assetError } = await supabase
       .from("assets")
-      .select("id, symbol, market_type, name");
+      .select("id, symbol, market_type, name, fivepaisa_scrip_code");
     if (assetError) throw new Error(`Failed to load assets: ${assetError.message}`);
     if (!assets || assets.length === 0) {
       return jsonResponse({ success: true, message: "No assets found", inserted: 0 });

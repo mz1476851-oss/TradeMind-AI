@@ -23,6 +23,7 @@ export interface Asset {
   symbol: string;
   market_type: MarketType;
   name: string;
+  fivepaisa_scrip_code: number | null;
 }
 
 export type ExecutionTarget = 'paper' | 'testnet_live' | 'coindcx_live' | 'fivepaisa_live';
