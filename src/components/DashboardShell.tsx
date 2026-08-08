@@ -11,6 +11,7 @@ import {
   TrendingUp,
   Menu,
   X,
+  ShieldCheck,
 } from 'lucide-react';
 
 export type PageId =
@@ -19,7 +20,8 @@ export type PageId =
   | 'history'
   | 'strategies'
   | 'portfolio'
-  | 'settings';
+  | 'settings'
+  | 'admin';
 
 interface NavItem {
   id: PageId;
@@ -34,6 +36,7 @@ const NAV: NavItem[] = [
   { id: 'strategies', label: 'Strategies', icon: Settings2 },
   { id: 'portfolio', label: 'Portfolio', icon: Briefcase },
   { id: 'settings', label: 'Settings', icon: Cog },
+  { id: 'admin', label: 'Admin', icon: ShieldCheck },
 ];
 
 export function DashboardShell({
