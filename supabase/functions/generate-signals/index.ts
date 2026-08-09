@@ -725,8 +725,21 @@ function calculatePositionSize(
 ): { quantity: number; riskAmount: number } {
   const riskAmount = capital * (riskPct / 100);
   const riskPerShare = Math.abs(entryPrice - stopLoss);
-  if (riskPerShare <= 0) return { quantity: 0, riskAmount };
-  const quantity = riskAmount / riskPerShare;
+  if (riskPerShare <= 0 || entryPrice <= 0) return { quantity: 0, riskAmount };
+
+  let quantity = riskAmount / riskPerShare;
+
+  // Safety cap: regardless of how tight the computed stop-loss distance is
+  // (e.g. from unusually flat/low-volatility price data), never size a position
+  // worth more than 25% of the account's capital. This bounds worst-case
+  // exposure from a degenerate risk-per-share value instead of trusting it blindly.
+  const MAX_POSITION_VALUE_PCT = 0.25;
+  const maxPositionValue = capital * MAX_POSITION_VALUE_PCT;
+  const positionValue = quantity * entryPrice;
+  if (positionValue > maxPositionValue) {
+    quantity = maxPositionValue / entryPrice;
+  }
+
   return { quantity, riskAmount };
 }
 
