@@ -8,6 +8,12 @@ const corsHeaders = {
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+// Module-level so every function in this file (including executeStrategies,
+// which calls the broker trade functions) can reach them without needing to
+// thread them through as parameters.
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
 // ---- Types ----
 interface AssetRow {
   id: string;
@@ -1014,8 +1020,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
     let backtestOnly = false;
