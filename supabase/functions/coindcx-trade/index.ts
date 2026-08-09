@@ -10,6 +10,17 @@ const corsHeaders = {
 
 const COINDCX_BASE = "https://api.coindcx.com";
 
+// Assets are stored internally as "BTC/USD" (matches the CoinGecko price-fetch
+// lookup table). CoinDCX's spot API needs a plain pair code. This defaults to a
+// USDT pair (e.g. "BTCUSDT") to stay consistent with the USD-based prices used
+// for position sizing elsewhere in the app. If your CoinDCX account only trades
+// INR pairs (common for Indian accounts), change the suffix below to "INR" —
+// but note the position-sizing math elsewhere assumes USD prices, so INR pairs
+// will need that reconciled too before using real money.
+function toCoindcxSymbol(symbol: string): string {
+  return symbol.toUpperCase().replace("/USD", "USDT").replace(/[^A-Z0-9]/g, "");
+}
+
 // ---- HMAC-SHA256 Signing (CoinDCX signs the raw JSON body string) ----
 async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -146,7 +157,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const side = body.side === "BUY" ? "buy" : "sell";
-      const order = await placeMarketOrder(creds.api_key, creds.api_secret, body.symbol, side, body.quantity);
+      const order = await placeMarketOrder(creds.api_key, creds.api_secret, toCoindcxSymbol(body.symbol), side, body.quantity);
 
       const updateData: Record<string, unknown> = {
         broker: "coindcx",

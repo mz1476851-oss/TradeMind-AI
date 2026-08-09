@@ -10,6 +10,13 @@ const corsHeaders = {
 
 const BINANCE_BASE = "https://testnet.binance.vision";
 
+// Assets are stored internally as "BTC/USD" (matches the CoinGecko price-fetch
+// lookup table) but Binance's API needs a plain pair like "BTCUSDT". Convert here
+// so callers can keep passing the asset's stored symbol unchanged.
+function toBinanceSymbol(symbol: string): string {
+  return symbol.toUpperCase().replace("/USD", "USDT").replace(/[^A-Z0-9]/g, "");
+}
+
 // ---- HMAC-SHA256 Signing ----
 async function hmacSha256(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -182,7 +189,7 @@ Deno.serve(async (req: Request) => {
       const orderResult = await placeMarketOrder(
         apiKey,
         secretKey,
-        body.symbol,
+        toBinanceSymbol(body.symbol),
         body.side,
         qtyStr,
       );
@@ -275,7 +282,7 @@ Deno.serve(async (req: Request) => {
           const status = await getOrderStatus(
             apiKey,
             secretKey,
-            symbol,
+            toBinanceSymbol(symbol),
             trade.broker_order_id,
           );
 
