@@ -829,6 +829,17 @@ async function executeStrategies(
 
   const results: TradeExecutionResult[] = [];
 
+  // Pre-fetch which (strategy, asset) pairs already have an open or pending
+  // position, so we don't stack duplicate trades on the same asset every time
+  // signals are generated. One query up front instead of one per iteration.
+  const { data: existingTrades } = await supabase
+    .from("trades")
+    .select("strategy_id, asset_id")
+    .in("status", ["open", "pending"]);
+  const openPositionKeys = new Set(
+    (existingTrades ?? []).map((t: { strategy_id: string | null; asset_id: string }) => `${t.strategy_id}:${t.asset_id}`),
+  );
+
   for (const strategy of strategies as StrategyRow[]) {
     const profile = profileMap.get(strategy.user_id);
     if (!profile) {
@@ -853,6 +864,11 @@ async function executeStrategies(
       const signal = signalTerm === "short_term" ? ind.stSignal : ind.ltSignal;
 
       if (!shouldExecuteForStrategy(strategy, signal, signalTerm)) continue;
+
+      if (openPositionKeys.has(`${strategy.id}:${assetId}`)) {
+        skipped.push(`${ind.asset.symbol}: already has an open/pending position for this strategy`);
+        continue;
+      }
 
       if (ind.atrVal === null || ind.lastClose <= 0) {
         skipped.push(`${ind.asset.symbol}: no ATR data`);
