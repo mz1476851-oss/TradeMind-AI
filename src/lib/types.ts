@@ -71,6 +71,18 @@ export interface StrategyAccuracy {
 
 export type ExecutionMode = 'paper' | 'testnet_live' | 'coindcx_live' | 'fivepaisa_live';
 
+export type NotificationType = 'trade_opened' | 'trade_closed_win' | 'trade_closed_loss' | 'risk_limit_hit' | 'broker_error';
+
+export interface AppNotification {
+  id: string;
+  user_id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 export interface Trade {
   id: string;
   user_id: string;

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { NotificationBell } from '@/components/NotificationBell';
 import {
   LayoutDashboard,
   Radio,
@@ -111,6 +112,7 @@ export function DashboardShell({
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
                 PAPER TRADING MODE
               </span>
+              <NotificationBell />
               <div className="flex items-center gap-2 pl-3 border-l border-slate-800">
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center text-xs font-semibold text-white">
                   {initials}

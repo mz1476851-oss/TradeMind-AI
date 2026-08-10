@@ -723,6 +723,21 @@ interface TradeExecutionResult {
   skipped: string[];
 }
 
+async function notify(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  type: "trade_opened" | "trade_closed_win" | "trade_closed_loss" | "risk_limit_hit" | "broker_error",
+  title: string,
+  message: string,
+): Promise<void> {
+  // Best-effort — a notification failing to write should never block trading.
+  try {
+    await supabase.from("notifications").insert({ user_id: userId, type, title, message });
+  } catch {
+    // ignore
+  }
+}
+
 function calculatePositionSize(
   capital: number,
   riskPct: number,
@@ -855,6 +870,7 @@ async function executeStrategies(
 
     let tradesCreated = 0;
     let suggestionsCreated = 0;
+    let riskLimitNotified = false;
     const skipped: string[] = [];
 
     for (const [assetId, ind] of indicators) {
@@ -930,6 +946,16 @@ async function executeStrategies(
         const dailyLossExceeded = await checkDailyLossLimit(supabase, strategy.user_id, profile);
         if (dailyLossExceeded) {
           skipped.push(`${ind.asset.symbol}: daily loss limit reached`);
+          if (!riskLimitNotified) {
+            riskLimitNotified = true;
+            await notify(
+              supabase,
+              strategy.user_id,
+              "risk_limit_hit",
+              "Daily loss limit reached",
+              `"${strategy.name}" has hit its daily loss limit (${profile.daily_loss_limit_pct}%). New trades are paused for this strategy until tomorrow.`,
+            );
+          }
           continue;
         }
 
@@ -948,6 +974,15 @@ async function executeStrategies(
           skipped.push(`${ind.asset.symbol}: ${insertErr.message}`);
           continue;
         }
+
+        const modeLabel = executionMode === "paper" ? "paper" : executionMode.replace("_live", "").toUpperCase();
+        await notify(
+          supabase,
+          strategy.user_id,
+          "trade_opened",
+          `${tradeType === "long" ? "Long" : "Short"} opened: ${ind.asset.symbol}`,
+          `"${strategy.name}" opened a ${tradeType} position on ${ind.asset.symbol} at ${entryPrice.toFixed(2)} (${modeLabel}).`,
+        );
 
         // If a live broker mode, place the order with that broker
         if (isTestnet || isCoindcx) {
@@ -972,6 +1007,13 @@ async function executeStrategies(
             if (!resp.ok) {
               const errData = await resp.json().catch(() => ({}));
               skipped.push(`${ind.asset.symbol}: ${brokerLabel} error: ${errData.error ?? resp.statusText}`);
+              await notify(
+                supabase,
+                strategy.user_id,
+                "broker_error",
+                `${brokerLabel} order failed: ${ind.asset.symbol}`,
+                `${errData.error ?? resp.statusText}`,
+              );
             }
           } catch (e) {
             skipped.push(`${ind.asset.symbol}: ${brokerLabel} unreachable: ${e instanceof Error ? e.message : String(e)}`);

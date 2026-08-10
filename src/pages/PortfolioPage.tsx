@@ -2,24 +2,32 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import type { Trade, Asset, PortfolioSnapshot } from '@/lib/types';
-import { Briefcase, TrendingUp, TrendingDown, DollarSign, Activity, Globe } from 'lucide-react';
+import { Briefcase, TrendingUp, TrendingDown, DollarSign, Activity, Globe, Sparkles } from 'lucide-react';
 
 export function PortfolioPage() {
   const { user, profile } = useAuth();
   const [openTrades, setOpenTrades] = useState<Trade[]>([]);
+  const [closedTrades, setClosedTrades] = useState<Trade[]>([]);
   const [assets, setAssets] = useState<Record<string, Asset>>({});
   const [snapshots, setSnapshots] = useState<PortfolioSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [tradeRes, assetRes, snapRes] = await Promise.all([
+    const [tradeRes, closedRes, assetRes, snapRes] = await Promise.all([
       supabase
         .from('trades')
         .select('*')
         .eq('user_id', user!.id)
         .eq('status', 'open')
         .order('opened_at', { ascending: false }),
+      supabase
+        .from('trades')
+        .select('*')
+        .eq('user_id', user!.id)
+        .eq('status', 'closed')
+        .order('closed_at', { ascending: false })
+        .limit(200),
       supabase.from('assets').select('id, symbol, market_type, name'),
       supabase
         .from('portfolio_snapshots')
@@ -30,6 +38,7 @@ export function PortfolioPage() {
     ]);
 
     setOpenTrades((tradeRes.data as Trade[]) ?? []);
+    setClosedTrades((closedRes.data as Trade[]) ?? []);
     if (assetRes.data) {
       const map: Record<string, Asset> = {};
       for (const a of assetRes.data as Asset[]) map[a.id] = a;
@@ -48,6 +57,38 @@ export function PortfolioPage() {
 
   const capital = profile?.virtual_capital ?? 0;
   const openCount = openTrades.length;
+
+  // Growth projection — uses actual trade history (win rate + average return per
+  // trade) to project forward, rather than assuming any fixed rate. Needs a
+  // minimum sample size before it says anything, otherwise it's just noise.
+  const wins = closedTrades.filter((t) => t.pnl > 0).length;
+  const totalClosed = closedTrades.length;
+  const winRate = totalClosed > 0 ? wins / totalClosed : 0;
+  const avgPnlPct =
+    totalClosed > 0
+      ? closedTrades.reduce((sum, t) => {
+          const base = t.entry_price * t.quantity;
+          return sum + (base > 0 ? t.pnl / base : 0);
+        }, 0) / totalClosed
+      : 0;
+  // Rough trade frequency from the observed history (trades per day), capped
+  // to avoid wild extrapolation from a tiny time window.
+  let tradesPerDay = 0;
+  if (totalClosed >= 2) {
+    const times = closedTrades
+      .map((t) => (t.closed_at ? new Date(t.closed_at).getTime() : null))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b);
+    const spanDays = Math.max((times[times.length - 1] - times[0]) / 86400000, 1);
+    tradesPerDay = Math.min(totalClosed / spanDays, 10);
+  }
+  const hasEnoughHistory = totalClosed >= 5 && tradesPerDay > 0;
+  const projectFor = (days: number) => {
+    if (!hasEnoughHistory) return null;
+    const expectedTrades = tradesPerDay * days;
+    const growthFactor = Math.pow(1 + avgPnlPct, expectedTrades);
+    return capital * growthFactor;
+  };
 
   // Simple sparkline from snapshots
   const sparkValues = snapshots.length > 0
@@ -109,6 +150,60 @@ export function PortfolioPage() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
+            <div className="flex items-center gap-2 mb-1">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              <h3 className="text-sm font-semibold text-white">Growth Projection</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Based on your own trade history — not a guarantee. Past results don't predict future ones.
+            </p>
+            {!hasEnoughHistory ? (
+              <p className="text-sm text-slate-500 py-4">
+                Close at least 5 trades to unlock a projection based on your actual win rate and average
+                return per trade.
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <p className="text-xs text-slate-500">Starting Capital</p>
+                    <p className="text-sm font-semibold text-white">{fmt(profile?.starting_capital ?? capital)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Win Rate</p>
+                    <p className="text-sm font-semibold text-white">{(winRate * 100).toFixed(0)}%</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Avg Return / Trade</p>
+                    <p className={`text-sm font-semibold ${avgPnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {avgPnlPct >= 0 ? '+' : ''}{(avgPnlPct * 100).toFixed(2)}%
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">Trade Frequency</p>
+                    <p className="text-sm font-semibold text-white">~{tradesPerDay.toFixed(1)}/day</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {[7, 30, 90].map((days) => {
+                    const projected = projectFor(days);
+                    const pct = projected !== null ? ((projected - capital) / capital) * 100 : 0;
+                    return (
+                      <div key={days} className="bg-slate-800/40 rounded-xl p-3 text-center">
+                        <p className="text-xs text-slate-500 mb-1">{days} days</p>
+                        <p className="text-sm font-semibold text-white">{projected !== null ? fmt(projected) : '—'}</p>
+                        <p className={`text-xs mt-0.5 ${pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">

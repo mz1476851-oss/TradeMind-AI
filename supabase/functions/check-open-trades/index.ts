@@ -19,6 +19,13 @@ interface OpenTrade {
   take_profit: number | null;
   status: string;
   opened_at: string;
+  execution_mode: string;
+}
+
+interface AssetInfo {
+  id: string;
+  symbol: string;
+  fivepaisa_scrip_code: number | null;
 }
 
 interface AssetPrice {
@@ -38,6 +45,102 @@ function calcPnl(
   return Math.round(diff * quantity * 100) / 100;
 }
 
+async function notify(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  type: string,
+  title: string,
+  message: string,
+): Promise<void> {
+  try {
+    await supabase.from("notifications").insert({ user_id: userId, type, title, message });
+  } catch {
+    // best-effort — never block trade closing over a notification failure
+  }
+}
+
+// For live-broker trades, hitting SL/TP in our own price data is not enough —
+// the actual position on the exchange must be closed too, or the DB and the
+// real account silently drift apart (we'd show "closed" while a real position
+// stays open). This places the opposite-side order to flatten it before we
+// mark the trade closed.
+async function closeLivePosition(
+  supabaseUrl: string,
+  serviceKey: string,
+  trade: OpenTrade,
+  asset: AssetInfo | undefined,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!asset) return { ok: false, error: "asset not found" };
+  const closingSide = trade.trade_type === "long" ? "SELL" : "BUY";
+
+  try {
+    if (trade.execution_mode === "testnet_live") {
+      const resp = await fetch(`${supabaseUrl}/functions/v1/binance-testnet-trade`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${serviceKey}` },
+        body: JSON.stringify({
+          action: "place_order",
+          trade_id: trade.id,
+          symbol: asset.symbol,
+          side: closingSide,
+          quantity: trade.quantity,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        return { ok: false, error: err.error ?? resp.statusText };
+      }
+      return { ok: true };
+    }
+
+    if (trade.execution_mode === "coindcx_live") {
+      const resp = await fetch(`${supabaseUrl}/functions/v1/coindcx-trade`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${serviceKey}` },
+        body: JSON.stringify({
+          action: "place_order",
+          trade_id: trade.id,
+          symbol: asset.symbol,
+          side: closingSide,
+          quantity: trade.quantity,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        return { ok: false, error: err.error ?? resp.statusText };
+      }
+      return { ok: true };
+    }
+
+    if (trade.execution_mode === "fivepaisa_live") {
+      if (!asset.fivepaisa_scrip_code) {
+        return { ok: false, error: "no fivepaisa_scrip_code mapped for this asset" };
+      }
+      const resp = await fetch(`${supabaseUrl}/functions/v1/fivepaisa-trade`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${serviceKey}` },
+        body: JSON.stringify({
+          action: "place_order",
+          trade_id: trade.id,
+          scrip_code: asset.fivepaisa_scrip_code,
+          side: closingSide,
+          quantity: trade.quantity,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        return { ok: false, error: err.error ?? resp.statusText };
+      }
+      return { ok: true };
+    }
+
+    // paper mode — nothing to close with a real broker
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -51,7 +154,7 @@ Deno.serve(async (req: Request) => {
     // Load all open trades
     const { data: openTrades, error: tradeError } = await supabase
       .from("trades")
-      .select("id, user_id, asset_id, trade_type, entry_price, quantity, stop_loss, take_profit, status, opened_at")
+      .select("id, user_id, asset_id, trade_type, entry_price, quantity, stop_loss, take_profit, status, opened_at, execution_mode")
       .eq("status", "open");
 
     if (tradeError) throw new Error(`Failed to load trades: ${tradeError.message}`);
@@ -74,6 +177,15 @@ Deno.serve(async (req: Request) => {
       if (latest && latest.length > 0) {
         assetPrices.set(assetId, Number(latest[0].close));
       }
+    }
+
+    const { data: assetRows } = await supabase
+      .from("assets")
+      .select("id, symbol, fivepaisa_scrip_code")
+      .in("id", assetIds);
+    const assetMap = new Map<string, AssetInfo>();
+    for (const a of (assetRows ?? []) as AssetInfo[]) {
+      assetMap.set(a.id, a);
     }
 
     let closedCount = 0;
@@ -119,6 +231,18 @@ Deno.serve(async (req: Request) => {
 
       if (!shouldClose) continue;
 
+      // For live-broker trades, flatten the real position first. If that fails,
+      // don't mark the trade closed — we'd otherwise show "closed" in the app
+      // while a real position stays open on the exchange. It'll be retried on
+      // the next run instead.
+      if (trade.execution_mode !== "paper") {
+        const closeResult = await closeLivePosition(supabaseUrl, serviceKey, trade, assetMap.get(trade.asset_id));
+        if (!closeResult.ok) {
+          errors.push(`Trade ${trade.id}: broker close failed (${closeResult.error}) — will retry next run, NOT marked closed`);
+          continue;
+        }
+      }
+
       const pnl = calcPnl(trade.trade_type, trade.entry_price, exitPrice, trade.quantity);
       const now = new Date().toISOString();
 
@@ -141,6 +265,14 @@ Deno.serve(async (req: Request) => {
       closedByUser.set(
         trade.user_id,
         (closedByUser.get(trade.user_id) ?? 0) + pnl,
+      );
+
+      await notify(
+        supabase,
+        trade.user_id,
+        pnl >= 0 ? "trade_closed_win" : "trade_closed_loss",
+        `${pnl >= 0 ? "Closed in profit" : "Closed at a loss"}: ${assetMap.get(trade.asset_id)?.symbol ?? trade.asset_id}`,
+        `Position closed via ${closeReason.replace("_", " ")} at ${exitPrice.toFixed(2)}. P&L: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}.`,
       );
     }
 
