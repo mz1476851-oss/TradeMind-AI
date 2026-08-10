@@ -67,12 +67,14 @@ async function placeMarketOrder(
   side: "BUY" | "SELL",
   quantity: string,
 ): Promise<BinanceOrderResponse> {
+  const roundedQuantity = await roundToLotSize(symbol, quantity);
+
   const timestamp = Date.now().toString();
   const params: Record<string, string> = {
     symbol: symbol.toUpperCase(),
     side,
     type: "MARKET",
-    quantity,
+    quantity: roundedQuantity,
     timestamp,
     recvWindow: "10000",
   };
@@ -92,6 +94,38 @@ async function placeMarketOrder(
     throw new Error(`Binance order failed (${response.status}): ${data.msg ?? JSON.stringify(data)}`);
   }
   return data;
+}
+
+// Binance rejects any quantity that isn't an exact multiple of the symbol's
+// LOT_SIZE stepSize (and below minQty). Fetch the real filter for this symbol
+// and round the requested quantity down to the nearest valid step so orders
+// don't get rejected with "Filter failure: LOT_SIZE".
+async function roundToLotSize(symbol: string, quantity: string): Promise<string> {
+  const qty = parseFloat(quantity);
+  try {
+    const resp = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol.toUpperCase()}`);
+    const info = await resp.json();
+    const lotSizeFilter = info?.symbols?.[0]?.filters?.find(
+      (f: { filterType?: string }) => f.filterType === "LOT_SIZE",
+    ) as { stepSize?: string; minQty?: string } | undefined;
+
+    if (!lotSizeFilter?.stepSize) {
+      return quantity; // fall back to original if we couldn't read the filter
+    }
+
+    const stepSize = parseFloat(lotSizeFilter.stepSize);
+    const minQty = parseFloat(lotSizeFilter.minQty ?? "0");
+    const decimals = lotSizeFilter.stepSize.includes(".")
+      ? lotSizeFilter.stepSize.split(".")[1].replace(/0+$/, "").length
+      : 0;
+
+    let rounded = Math.floor(qty / stepSize) * stepSize;
+    if (rounded < minQty) rounded = minQty;
+
+    return rounded.toFixed(decimals);
+  } catch {
+    return quantity; // network hiccup fetching exchangeInfo — try original quantity rather than failing outright
+  }
 }
 
 async function getOrderStatus(
