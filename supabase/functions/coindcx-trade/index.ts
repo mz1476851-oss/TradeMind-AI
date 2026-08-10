@@ -113,6 +113,7 @@ Deno.serve(async (req: Request) => {
       symbol?: string; // CoinDCX market code, e.g. "BTCINR" or "BTCUSDT" — must match the asset's `symbol`
       side?: "BUY" | "SELL";
       quantity?: number;
+      intent?: "open" | "close";
     };
     try {
       body = await req.json();
@@ -159,15 +160,20 @@ Deno.serve(async (req: Request) => {
       const side = body.side === "BUY" ? "buy" : "sell";
       const order = await placeMarketOrder(creds.api_key, creds.api_secret, toCoindcxSymbol(body.symbol), side, body.quantity);
 
-      const updateData: Record<string, unknown> = {
-        broker: "coindcx",
-        broker_order_ref: order.id,
-      };
-      if (order.avg_price && order.avg_price > 0) {
-        updateData.entry_price = order.avg_price;
+      // Same rule as binance-testnet-trade: only persist entry_price/broker refs
+      // when this order is OPENING the position, never when it's the closing
+      // order for an exit — otherwise entry_price gets clobbered with the exit
+      // fill price. fill_price is always returned to the caller either way.
+      if ((body.intent ?? "open") === "open") {
+        const updateData: Record<string, unknown> = {
+          broker: "coindcx",
+          broker_order_ref: order.id,
+        };
+        if (order.avg_price && order.avg_price > 0) {
+          updateData.entry_price = order.avg_price;
+        }
+        await supabase.from("trades").update(updateData).eq("id", body.trade_id);
       }
-
-      await supabase.from("trades").update(updateData).eq("id", body.trade_id);
 
       return jsonResponse({
         success: true,

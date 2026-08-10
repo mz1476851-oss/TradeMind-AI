@@ -69,7 +69,7 @@ async function closeLivePosition(
   serviceKey: string,
   trade: OpenTrade,
   asset: AssetInfo | undefined,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; fillPrice?: number }> {
   if (!asset) return { ok: false, error: "asset not found" };
   const closingSide = trade.trade_type === "long" ? "SELL" : "BUY";
 
@@ -84,13 +84,14 @@ async function closeLivePosition(
           symbol: asset.symbol,
           side: closingSide,
           quantity: trade.quantity,
+          intent: "close",
         }),
       });
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        return { ok: false, error: err.error ?? resp.statusText };
+        return { ok: false, error: data.error ?? resp.statusText };
       }
-      return { ok: true };
+      return { ok: true, fillPrice: typeof data.fill_price === "number" ? data.fill_price : undefined };
     }
 
     if (trade.execution_mode === "coindcx_live") {
@@ -103,13 +104,14 @@ async function closeLivePosition(
           symbol: asset.symbol,
           side: closingSide,
           quantity: trade.quantity,
+          intent: "close",
         }),
       });
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        return { ok: false, error: err.error ?? resp.statusText };
+        return { ok: false, error: data.error ?? resp.statusText };
       }
-      return { ok: true };
+      return { ok: true, fillPrice: typeof data.fill_price === "number" ? data.fill_price : undefined };
     }
 
     if (trade.execution_mode === "fivepaisa_live") {
@@ -131,6 +133,8 @@ async function closeLivePosition(
         const err = await resp.json().catch(() => ({}));
         return { ok: false, error: err.error ?? resp.statusText };
       }
+      // 5paisa's synchronous order response doesn't include a fill price here,
+      // so PnL for 5paisa exits still falls back to the SL/TP level for now.
       return { ok: true };
     }
 
@@ -240,6 +244,12 @@ Deno.serve(async (req: Request) => {
         if (!closeResult.ok) {
           errors.push(`Trade ${trade.id}: broker close failed (${closeResult.error}) — will retry next run, NOT marked closed`);
           continue;
+        }
+        // Use the broker's actual closing fill price for PnL, not the
+        // theoretical SL/TP level — the real exchange fill is what actually
+        // happened to the account.
+        if (closeResult.fillPrice !== undefined && closeResult.fillPrice > 0) {
+          exitPrice = closeResult.fillPrice;
         }
       }
 

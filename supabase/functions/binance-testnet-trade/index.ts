@@ -199,6 +199,7 @@ Deno.serve(async (req: Request) => {
       symbol?: string;
       side?: "BUY" | "SELL";
       quantity?: number;
+      intent?: "open" | "close";
     };
     try {
       body = await req.json();
@@ -246,18 +247,24 @@ Deno.serve(async (req: Request) => {
         fillPrice = parseFloat(orderResult.avgPrice);
       }
 
-      // Update the trade with broker_order_id and actual fill price
-      const updateData: Record<string, unknown> = {
-        broker_order_id: orderResult.orderId,
-      };
-      if (fillPrice !== null) {
-        updateData.entry_price = Math.round(fillPrice * 1000000) / 1000000;
-      }
+      // Update the trade with broker_order_id and actual fill price — but only
+      // when this order is OPENING the position. When it's the closing order
+      // (intent: "close"), overwriting entry_price here would corrupt the
+      // original entry with the exit fill price, so we skip the update and
+      // just report fill_price back to the caller for their own PnL math.
+      if ((body.intent ?? "open") === "open") {
+        const updateData: Record<string, unknown> = {
+          broker_order_id: orderResult.orderId,
+        };
+        if (fillPrice !== null) {
+          updateData.entry_price = Math.round(fillPrice * 1000000) / 1000000;
+        }
 
-      await supabase
-        .from("trades")
-        .update(updateData)
-        .eq("id", body.trade_id);
+        await supabase
+          .from("trades")
+          .update(updateData)
+          .eq("id", body.trade_id);
+      }
 
       return jsonResponse({
         success: true,
