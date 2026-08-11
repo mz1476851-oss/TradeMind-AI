@@ -270,6 +270,7 @@ function StrategyForm({
   const [confidence, setConfidence] = useState('60');
   const [autoTrade, setAutoTrade] = useState(false);
   const [executionTarget, setExecutionTarget] = useState<ExecutionTarget>('paper');
+  const [trailingStopPct, setTrailingStopPct] = useState('');
   const [watchedMarkets, setWatchedMarkets] = useState<MarketType[]>([]);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -306,6 +307,7 @@ function StrategyForm({
       watched_markets: watchedMarkets,
       watched_asset_ids: selectedAssetIds,
       execution_target: executionTarget,
+      trailing_stop_pct: trailingStopPct.trim() ? parseFloat(trailingStopPct) : null,
     });
     setBusy(false);
     if (dbError) {
@@ -415,6 +417,25 @@ function StrategyForm({
               onChange={(e) => setRiskPct(e.target.value)}
               className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-emerald-500 transition"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              Trailing Stop (%) <span className="text-slate-600">(optional)</span>
+            </label>
+            <input
+              type="number"
+              min="0.1"
+              max="20"
+              step="0.1"
+              value={trailingStopPct}
+              onChange={(e) => setTrailingStopPct(e.target.value)}
+              placeholder="Leave empty to disable"
+              className="w-full bg-slate-800/60 border border-slate-700 rounded-lg px-3.5 py-2.5 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+            />
+            <p className="text-xs text-slate-500 mt-1.5">
+              When set, the stop-loss automatically follows price in your favor as a position gains,
+              locking in more profit — it only ever tightens, never loosens.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Min Confidence (%)</label>

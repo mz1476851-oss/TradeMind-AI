@@ -43,6 +43,7 @@ export interface Strategy {
   watched_markets: MarketType[];
   watched_asset_ids: string[];
   execution_target: ExecutionTarget;
+  trailing_stop_pct: number | null;
 }
 
 export interface Signal {

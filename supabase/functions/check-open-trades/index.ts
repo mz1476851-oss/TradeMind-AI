@@ -12,6 +12,7 @@ interface OpenTrade {
   id: string;
   user_id: string;
   asset_id: string;
+  strategy_id: string | null;
   trade_type: string;
   entry_price: number;
   quantity: number;
@@ -20,6 +21,7 @@ interface OpenTrade {
   status: string;
   opened_at: string;
   execution_mode: string;
+  high_water_mark: number | null;
 }
 
 interface AssetInfo {
@@ -158,7 +160,7 @@ Deno.serve(async (req: Request) => {
     // Load all open trades
     const { data: openTrades, error: tradeError } = await supabase
       .from("trades")
-      .select("id, user_id, asset_id, trade_type, entry_price, quantity, stop_loss, take_profit, status, opened_at, execution_mode")
+      .select("id, user_id, asset_id, strategy_id, trade_type, entry_price, quantity, stop_loss, take_profit, status, opened_at, execution_mode, high_water_mark")
       .eq("status", "open");
 
     if (tradeError) throw new Error(`Failed to load trades: ${tradeError.message}`);
@@ -192,6 +194,22 @@ Deno.serve(async (req: Request) => {
       assetMap.set(a.id, a);
     }
 
+    const strategyIds = [...new Set(
+      (openTrades as OpenTrade[]).map((t) => t.strategy_id).filter((id): id is string => id !== null),
+    )];
+    const trailingPctMap = new Map<string, number>();
+    if (strategyIds.length > 0) {
+      const { data: strategyRows } = await supabase
+        .from("strategies")
+        .select("id, trailing_stop_pct")
+        .in("id", strategyIds);
+      for (const s of (strategyRows ?? []) as Array<{ id: string; trailing_stop_pct: number | null }>) {
+        if (s.trailing_stop_pct && s.trailing_stop_pct > 0) {
+          trailingPctMap.set(s.id, s.trailing_stop_pct);
+        }
+      }
+    }
+
     let closedCount = 0;
     const closedByUser = new Map<string, number>(); // user_id -> pnl delta
     const errors: string[] = [];
@@ -206,6 +224,37 @@ Deno.serve(async (req: Request) => {
       let shouldClose = false;
       let exitPrice = currentPrice;
       let closeReason = "";
+
+      // Trailing stop: if this trade's strategy has trailing enabled, ratchet
+      // the stop-loss toward the current price as it moves favorably. Never
+      // loosens the stop — only tightens it, so downside never gets worse
+      // than the original stop-loss.
+      const trailingPct = trade.strategy_id ? trailingPctMap.get(trade.strategy_id) : undefined;
+      if (trailingPct) {
+        const isLong = trade.trade_type === "long";
+        const priorMark = trade.high_water_mark ?? trade.entry_price;
+        const newMark = isLong ? Math.max(priorMark, currentPrice) : Math.min(priorMark, currentPrice);
+
+        if (newMark !== priorMark) {
+          const candidateStop = isLong
+            ? newMark * (1 - trailingPct / 100)
+            : newMark * (1 + trailingPct / 100);
+          const currentStop = trade.stop_loss ?? candidateStop;
+          const tightenedStop = isLong
+            ? Math.max(currentStop, candidateStop)
+            : Math.min(currentStop, candidateStop);
+
+          if (tightenedStop !== currentStop) {
+            trade.stop_loss = tightenedStop;
+          }
+          trade.high_water_mark = newMark;
+
+          await supabase
+            .from("trades")
+            .update({ stop_loss: trade.stop_loss, high_water_mark: newMark })
+            .eq("id", trade.id);
+        }
+      }
 
       // Check stop-loss hit
       if (trade.stop_loss !== null) {
