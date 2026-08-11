@@ -34,6 +34,7 @@ import { TradeHistoryPage as TradeHistoryPageImpl } from '@/pages/TradeHistoryPa
 import { PortfolioPage as PortfolioPageImpl } from '@/pages/PortfolioPage';
 import { SettingsPage as SettingsPageImpl } from '@/pages/SettingsPage';
 import { AdminAssetsPage } from '@/pages/AdminAssetsPage';
+import { BacktestPage } from '@/pages/BacktestPage';
 
 interface RefreshResult {
   success: boolean;
@@ -553,5 +554,7 @@ export function renderPage(id: PageId) {
       return <SettingsPage />;
     case 'admin':
       return <AdminAssetsPage />;
+    case 'backtest':
+      return <BacktestPage />;
   }
 }

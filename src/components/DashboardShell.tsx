@@ -13,6 +13,7 @@ import {
   Menu,
   X,
   ShieldCheck,
+  BarChart3,
 } from 'lucide-react';
 
 export type PageId =
@@ -22,7 +23,8 @@ export type PageId =
   | 'strategies'
   | 'portfolio'
   | 'settings'
-  | 'admin';
+  | 'admin'
+  | 'backtest';
 
 interface NavItem {
   id: PageId;
@@ -35,6 +37,7 @@ const NAV: NavItem[] = [
   { id: 'signals', label: 'Signals', icon: Radio },
   { id: 'history', label: 'Trade History', icon: History },
   { id: 'strategies', label: 'Strategies', icon: Settings2 },
+  { id: 'backtest', label: 'Backtest', icon: BarChart3 },
   { id: 'portfolio', label: 'Portfolio', icon: Briefcase },
   { id: 'settings', label: 'Settings', icon: Cog },
   { id: 'admin', label: 'Admin', icon: ShieldCheck },
