@@ -952,6 +952,19 @@ async function executeStrategies(
         continue;
       }
 
+      // Guard against degenerate volatility readings (e.g. from a burst of
+      // near-identical price snapshots collected close together, or a
+      // genuinely dead/illiquid market). A near-zero ATR produces a
+      // stop-loss sitting right on top of the entry price, which then gets
+      // triggered by ordinary noise almost immediately — this isn't a real
+      // trading opportunity, it's a data artifact.
+      const atrPctOfPrice = ind.atrVal / ind.lastClose;
+      const MIN_ATR_PCT = 0.0005; // 0.05% — below this, the stop distance isn't meaningful
+      if (atrPctOfPrice < MIN_ATR_PCT) {
+        skipped.push(`${ind.asset.symbol}: volatility too low to size a meaningful stop (ATR ${(atrPctOfPrice * 100).toFixed(3)}% of price)`);
+        continue;
+      }
+
       const atrDistance = ind.atrVal * 1.5;
       const isBuy = signal.signal_type === "buy";
       const entryPrice = ind.lastClose;
