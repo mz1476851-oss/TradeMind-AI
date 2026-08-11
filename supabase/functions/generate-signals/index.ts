@@ -99,6 +99,67 @@ function emaSeries(values: number[], period: number): number[] {
   return result;
 }
 
+// ---- Multi-timeframe confirmation ----
+// Our raw candles come from one fetch cadence (~every 10 min). To approximate
+// a higher timeframe without a second data feed, group consecutive raw
+// candles into coarser bars (e.g. 6 bars ≈ roughly hourly) and read the trend
+// off that coarser series. This is a real (if approximate) higher-timeframe
+// read, not just a relabeled version of the same data — it smooths out the
+// noise that produces false short-term signals.
+function resampleCandles(candles: Candle[], groupSize: number): Candle[] {
+  if (groupSize <= 1) return candles;
+  const out: Candle[] = [];
+  for (let i = 0; i < candles.length; i += groupSize) {
+    const group = candles.slice(i, i + groupSize);
+    if (group.length === 0) continue;
+    out.push({
+      timestamp: group[group.length - 1].timestamp,
+      open: group[0].open,
+      high: Math.max(...group.map((c) => c.high)),
+      low: Math.min(...group.map((c) => c.low)),
+      close: group[group.length - 1].close,
+      volume: group.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+  return out;
+}
+
+type HtfTrend = "bullish" | "bearish" | "neutral";
+
+function higherTimeframeTrend(candles: Candle[], groupSize = 6): HtfTrend {
+  const resampled = resampleCandles(candles, groupSize);
+  const closes = resampled.map((c) => c.close);
+  if (closes.length < 21) return "neutral"; // not enough resampled history to trust a read yet
+  const fast = ema(closes, 9);
+  const slow = ema(closes, 21);
+  if (fast === null || slow === null) return "neutral";
+  const spread = Math.abs(fast - slow) / slow;
+  if (spread < 0.0015) return "neutral"; // EMAs basically flat/tangled — no clear trend either way
+  return fast > slow ? "bullish" : "bearish";
+}
+
+// Downgrades a short-term signal that fights the higher-timeframe trend,
+// instead of trusting a fast/noisy read in isolation. Never invents a
+// direction the base signal didn't already have — only softens conflicts.
+function applyMtfConfirmation(signal: ScoreResult, htf: HtfTrend): ScoreResult {
+  if (htf === "neutral") return signal;
+  if (signal.signal_type === "buy" && htf === "bearish") {
+    return {
+      signal_type: "hold",
+      confidence_score: Math.round(signal.confidence_score * 0.5),
+      reasoning_text: `${signal.reasoning_text}. Downgraded: conflicts with bearish higher-timeframe trend`,
+    };
+  }
+  if (signal.signal_type === "sell" && htf === "bullish") {
+    return {
+      signal_type: "hold",
+      confidence_score: Math.round(signal.confidence_score * 0.5),
+      reasoning_text: `${signal.reasoning_text}. Downgraded: conflicts with bullish higher-timeframe trend`,
+    };
+  }
+  return signal;
+}
+
 function rsi(values: number[], period: number): number | null {
   if (values.length < period + 1) return null;
   let gains = 0;
@@ -1136,7 +1197,8 @@ Deno.serve(async (req: Request) => {
       }
 
       const ind = computeAllIndicators(candles);
-      const st = shortTermScore(ind);
+      const htfTrend = higherTimeframeTrend(candles);
+      const st = applyMtfConfirmation(shortTermScore(ind), htfTrend);
       const lt = longTermScore(ind);
 
       const atrPct = ind.atrVal !== null && ind.lastClose > 0
