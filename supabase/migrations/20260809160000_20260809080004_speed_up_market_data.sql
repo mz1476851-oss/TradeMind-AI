@@ -1,24 +1,24 @@
 /*
-# Speed up market data collection: every 10 min -> every 2 min
+# Speed up market data collection: every 10 minutes down to every 2 minutes
 
 1. Why
 - Faster, more granular price history means the indicators (ATR, RSI, EMA,
   etc.) have real, meaningful data to work with sooner, and volatility reads
   are less likely to look artificially flat.
-- This does NOT need any manual PowerShell loop ever again — pg_cron runs
+- This does NOT need any manual PowerShell loop ever again -- pg_cron runs
   this in the background automatically, forever, with no action needed.
 
 2. Changes
-- Re-points the `trademind_fetch_market_data` cron job from '*/10 * * * *'
-  (every 10 min) to '*/2 * * * *' (every 2 min).
+- Re-points the trademind_fetch_market_data cron job to run every 2 minutes
+  instead of every 10 minutes.
 - Signal generation and position monitoring stay on their existing schedules
-  (10 min / 5 min) — there's no benefit to re-scoring signals faster than
+  (10 min / 5 min) -- there's no benefit to re-scoring signals faster than
   that, only to collecting more price history faster.
 
 3. Notes
 - Free-tier price APIs (CoinGecko, exchangerate.host, Twelve Data) have rate
   limits that make "every second" impractical and unnecessary for a
-  short/long-term signal system — this is not a high-frequency trading bot.
+  short/long-term signal system -- this is not a high-frequency trading bot.
   Every 2 minutes is a reasonable, sustainable pace.
 */
 
