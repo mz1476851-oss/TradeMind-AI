@@ -959,7 +959,7 @@ async function executeStrategies(
       // triggered by ordinary noise almost immediately — this isn't a real
       // trading opportunity, it's a data artifact.
       const atrPctOfPrice = ind.atrVal / ind.lastClose;
-      const MIN_ATR_PCT = 0.0005; // 0.05% — below this, the stop distance isn't meaningful
+      const MIN_ATR_PCT = 0.0002; // 0.02% — below this, the stop distance isn't meaningful
       if (atrPctOfPrice < MIN_ATR_PCT) {
         skipped.push(`${ind.asset.symbol}: volatility too low to size a meaningful stop (ATR ${(atrPctOfPrice * 100).toFixed(3)}% of price)`);
         continue;
@@ -1168,6 +1168,15 @@ Deno.serve(async (req: Request) => {
       .select("id, symbol, market_type, name, fivepaisa_scrip_code");
     if (assetError) throw new Error(`Failed to load assets: ${assetError.message}`);
     if (!assets || assets.length === 0) {
+      try {
+        await supabase.from("pipeline_runs").insert({
+          job_name: "generate_signals",
+          status: "success",
+          summary: { message: "No assets found", signals_inserted: 0 },
+        });
+      } catch {
+        // best-effort logging only
+      }
       return jsonResponse({ success: true, message: "No assets found", inserted: 0 });
     }
 
@@ -1277,6 +1286,22 @@ Deno.serve(async (req: Request) => {
     // Execute user strategies
     const executionResults = await executeStrategies(supabase, indicators, signalsByAsset);
 
+    const totalTradesCreated = executionResults.reduce((sum, r) => sum + r.trades_created, 0);
+    try {
+      await supabase.from("pipeline_runs").insert({
+        job_name: "generate_signals",
+        status: "success",
+        summary: {
+          signals_inserted: totalInserted,
+          trades_created: totalTradesCreated,
+          strategies_run: executionResults.length,
+          errors: errors.length > 0 ? errors : undefined,
+        },
+      });
+    } catch {
+      // best-effort logging only
+    }
+
     return jsonResponse({
       success: true,
       inserted: totalInserted,
@@ -1285,6 +1310,16 @@ Deno.serve(async (req: Request) => {
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
+    try {
+      const errClient = createClient(supabaseUrl, serviceKey);
+      await errClient.from("pipeline_runs").insert({
+        job_name: "generate_signals",
+        status: "error",
+        summary: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } catch {
+      // best-effort logging only
+    }
     return jsonResponse(
       { success: false, error: err instanceof Error ? err.message : String(err) },
       500,

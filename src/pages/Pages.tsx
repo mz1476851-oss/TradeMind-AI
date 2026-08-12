@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { SystemHealthCard } from '@/components/SystemHealthCard';
 import {
   Radio,
   History,
@@ -222,6 +223,8 @@ export function DashboardPage() {
           )}
         </div>
       </div>
+
+      <SystemHealthCard />
     </div>
   );
 }

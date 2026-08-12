@@ -178,6 +178,18 @@ function mockPrice(symbol: string, min: number, max: number): number {
   return Math.round(base * jitter * 100) / 100;
 }
 
+async function logPipelineRun(
+  supabase: ReturnType<typeof createClient>,
+  status: "success" | "error",
+  summary: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await supabase.from("pipeline_runs").insert({ job_name: "fetch_market_data", status, summary });
+  } catch {
+    // never let logging break the actual job
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
@@ -223,6 +235,7 @@ Deno.serve(async (req: Request) => {
     allPrices.push(...crypto, ...stocks, ...forex);
 
     if (allPrices.length === 0) {
+      await logPipelineRun(supabase, "error", { message: "No prices fetched", errors });
       return new Response(
         JSON.stringify({
           success: false,
@@ -256,6 +269,12 @@ Deno.serve(async (req: Request) => {
       throw new Error(`Failed to insert market data: ${insertError.message}`);
     }
 
+    await logPipelineRun(supabase, "success", {
+      inserted: rows.length,
+      markets: { crypto: crypto.length, stocks: stocks.length, forex: forex.length },
+      errors: errors.length > 0 ? errors : undefined,
+    });
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -273,6 +292,14 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (err) {
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const supabase = createClient(supabaseUrl, serviceKey);
+      await logPipelineRun(supabase, "error", { error: err instanceof Error ? err.message : String(err) });
+    } catch {
+      // best-effort logging only
+    }
     return new Response(
       JSON.stringify({
         success: false,

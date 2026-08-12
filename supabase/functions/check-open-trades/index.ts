@@ -165,6 +165,15 @@ Deno.serve(async (req: Request) => {
 
     if (tradeError) throw new Error(`Failed to load trades: ${tradeError.message}`);
     if (!openTrades || openTrades.length === 0) {
+      try {
+        await supabase.from("pipeline_runs").insert({
+          job_name: "check_open_trades",
+          status: "success",
+          summary: { closed: 0, message: "No open trades" },
+        });
+      } catch {
+        // best-effort logging only
+      }
       return jsonResponse({ success: true, closed: 0, message: "No open trades" });
     }
 
@@ -386,12 +395,34 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    try {
+      await supabase.from("pipeline_runs").insert({
+        job_name: "check_open_trades",
+        status: "success",
+        summary: { closed: closedCount, errors: errors.length > 0 ? errors : undefined },
+      });
+    } catch {
+      // best-effort logging only
+    }
+
     return jsonResponse({
       success: true,
       closed: closedCount,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err) {
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const errClient = createClient(supabaseUrl, serviceKey);
+      await errClient.from("pipeline_runs").insert({
+        job_name: "check_open_trades",
+        status: "error",
+        summary: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } catch {
+      // best-effort logging only
+    }
     return jsonResponse(
       { success: false, error: err instanceof Error ? err.message : String(err) },
       500,
