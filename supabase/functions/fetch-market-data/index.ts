@@ -183,10 +183,9 @@ async function logPipelineRun(
   status: "success" | "error",
   summary: Record<string, unknown>,
 ): Promise<void> {
-  try {
-    await supabase.from("pipeline_runs").insert({ job_name: "fetch_market_data", status, summary });
-  } catch {
-    // never let logging break the actual job
+  const { error } = await supabase.from("pipeline_runs").insert({ job_name: "fetch_market_data", status, summary });
+  if (error) {
+    console.error("pipeline_runs insert failed:", error.message);
   }
 }
 
