@@ -813,9 +813,13 @@ function calculatePositionSize(
 
   // Safety cap: regardless of how tight the computed stop-loss distance is
   // (e.g. from unusually flat/low-volatility price data), never size a position
-  // worth more than 25% of the account's capital. This bounds worst-case
-  // exposure from a degenerate risk-per-share value instead of trusting it blindly.
-  const MAX_POSITION_VALUE_PCT = 0.25;
+  // worth more than 15% of the account's capital. This bounds worst-case
+  // exposure from a degenerate risk-per-share value instead of trusting it
+  // blindly, and leaves headroom for multiple concurrent positions to actually
+  // fit within the broker's real available balance (25% was too tight —
+  // 4 positions at 25% each left zero margin and some orders got rejected
+  // for insufficient balance).
+  const MAX_POSITION_VALUE_PCT = 0.15;
   const maxPositionValue = capital * MAX_POSITION_VALUE_PCT;
   const positionValue = quantity * entryPrice;
   if (positionValue > maxPositionValue) {
@@ -1050,15 +1054,23 @@ async function executeStrategies(
         }
 
         const modeLabel = executionMode === "paper" ? "paper" : executionMode.replace("_live", "").toUpperCase();
-        await notify(
-          supabase,
-          strategy.user_id,
-          "trade_opened",
-          `${tradeType === "long" ? "Long" : "Short"} opened: ${ind.asset.symbol}`,
-          `"${strategy.name}" opened a ${tradeType} position on ${ind.asset.symbol} at ${entryPrice.toFixed(2)} (${modeLabel}).`,
-        );
 
-        // If a live broker mode, place the order with that broker
+        if (executionMode === "paper") {
+          // Paper trades have no external broker to confirm with — notify immediately.
+          await notify(
+            supabase,
+            strategy.user_id,
+            "trade_opened",
+            `${tradeType === "long" ? "Long" : "Short"} opened: ${ind.asset.symbol}`,
+            `"${strategy.name}" opened a ${tradeType} position on ${ind.asset.symbol} at ${entryPrice.toFixed(2)} (${modeLabel}).`,
+          );
+        }
+
+        // If a live broker mode, place the order with that broker. The trade
+        // row was already inserted as "open" above — if the broker rejects
+        // the order (e.g. insufficient balance), mark it "cancelled" instead
+        // of leaving a phantom "open" position the app thinks exists but the
+        // exchange never actually has.
         if (isTestnet || isCoindcx) {
           const functionName = isTestnet ? "binance-testnet-trade" : "coindcx-trade";
           const brokerLabel = isTestnet ? "Binance testnet" : "CoinDCX";
@@ -1081,6 +1093,7 @@ async function executeStrategies(
             if (!resp.ok) {
               const errData = await resp.json().catch(() => ({}));
               skipped.push(`${ind.asset.symbol}: ${brokerLabel} error: ${errData.error ?? resp.statusText}`);
+              await supabase.from("trades").update({ status: "cancelled" }).eq("id", insertedTrade.id);
               await notify(
                 supabase,
                 strategy.user_id,
@@ -1088,13 +1101,23 @@ async function executeStrategies(
                 `${brokerLabel} order failed: ${ind.asset.symbol}`,
                 `${errData.error ?? resp.statusText}`,
               );
+            } else {
+              await notify(
+                supabase,
+                strategy.user_id,
+                "trade_opened",
+                `${tradeType === "long" ? "Long" : "Short"} opened: ${ind.asset.symbol}`,
+                `"${strategy.name}" opened a ${tradeType} position on ${ind.asset.symbol} at ${entryPrice.toFixed(2)} (${modeLabel}).`,
+              );
             }
           } catch (e) {
             skipped.push(`${ind.asset.symbol}: ${brokerLabel} unreachable: ${e instanceof Error ? e.message : String(e)}`);
+            await supabase.from("trades").update({ status: "cancelled" }).eq("id", insertedTrade.id);
           }
         } else if (isFivepaisa) {
           if (!ind.asset.fivepaisa_scrip_code) {
-            skipped.push(`${ind.asset.symbol}: no 5paisa ScripCode mapped for this asset yet — set assets.fivepaisa_scrip_code to enable live execution. Trade recorded in paper mode.`);
+            skipped.push(`${ind.asset.symbol}: no 5paisa ScripCode mapped for this asset yet — set assets.fivepaisa_scrip_code to enable live execution.`);
+            await supabase.from("trades").update({ status: "cancelled" }).eq("id", insertedTrade.id);
           } else {
             try {
               const orderSide = isBuy ? "BUY" : "SELL";
@@ -1115,9 +1138,26 @@ async function executeStrategies(
               if (!resp.ok) {
                 const errData = await resp.json().catch(() => ({}));
                 skipped.push(`${ind.asset.symbol}: 5paisa error: ${errData.error ?? resp.statusText}`);
+                await supabase.from("trades").update({ status: "cancelled" }).eq("id", insertedTrade.id);
+                await notify(
+                  supabase,
+                  strategy.user_id,
+                  "broker_error",
+                  `5paisa order failed: ${ind.asset.symbol}`,
+                  `${errData.error ?? resp.statusText}`,
+                );
+              } else {
+                await notify(
+                  supabase,
+                  strategy.user_id,
+                  "trade_opened",
+                  `${tradeType === "long" ? "Long" : "Short"} opened: ${ind.asset.symbol}`,
+                  `"${strategy.name}" opened a ${tradeType} position on ${ind.asset.symbol} at ${entryPrice.toFixed(2)} (${modeLabel}).`,
+                );
               }
             } catch (e) {
               skipped.push(`${ind.asset.symbol}: 5paisa unreachable: ${e instanceof Error ? e.message : String(e)}`);
+              await supabase.from("trades").update({ status: "cancelled" }).eq("id", insertedTrade.id);
             }
           }
         }
