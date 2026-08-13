@@ -36,6 +36,7 @@ import { PortfolioPage as PortfolioPageImpl } from '@/pages/PortfolioPage';
 import { SettingsPage as SettingsPageImpl } from '@/pages/SettingsPage';
 import { AdminAssetsPage } from '@/pages/AdminAssetsPage';
 import { BacktestPage } from '@/pages/BacktestPage';
+import { ChartsPage } from '@/pages/ChartsPage';
 
 interface RefreshResult {
   success: boolean;
@@ -559,5 +560,7 @@ export function renderPage(id: PageId) {
       return <AdminAssetsPage />;
     case 'backtest':
       return <BacktestPage />;
+    case 'charts':
+      return <ChartsPage />;
   }
 }

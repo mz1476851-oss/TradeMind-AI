@@ -66,6 +66,19 @@ async function signedPost(path: string, apiKey: string, apiSecret: string, body:
   return data;
 }
 
+interface CoindcxBalance {
+  currency: string;
+  balance: number;
+  locked_balance: number;
+}
+
+async function getBalances(apiKey: string, apiSecret: string): Promise<CoindcxBalance[]> {
+  const data = await signedPost("/exchange/v1/users/balances", apiKey, apiSecret, {
+    timestamp: Date.now(),
+  });
+  return (Array.isArray(data) ? data : []) as CoindcxBalance[];
+}
+
 async function placeMarketOrder(
   apiKey: string,
   apiSecret: string,
@@ -108,7 +121,7 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     let body: {
-      action?: "place_order" | "sync_fills";
+      action?: "place_order" | "sync_fills" | "get_balance";
       trade_id?: string;
       symbol?: string; // CoinDCX market code, e.g. "BTCINR" or "BTCUSDT" — must match the asset's `symbol`
       side?: "BUY" | "SELL";
@@ -122,6 +135,39 @@ Deno.serve(async (req: Request) => {
     }
 
     const action = body.action ?? "place_order";
+
+    // ---- Fetch the caller's own real CoinDCX balance ----
+    // Unlike place_order/sync_fills (called server-side with a trade_id),
+    // this is called directly from the Settings page by the logged-in user,
+    // so it authenticates via their session JWT instead.
+    if (action === "get_balance") {
+      const authHeader = req.headers.get("Authorization") ?? "";
+      const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
+      if (!jwt) {
+        return jsonResponse({ success: false, error: "Missing Authorization header" }, 401);
+      }
+      const { data: userData, error: userErr } = await supabase.auth.getUser(jwt);
+      if (userErr || !userData?.user) {
+        return jsonResponse({ success: false, error: "Invalid or expired session" }, 401);
+      }
+
+      const { data: credRow, error: credErr } = await supabase
+        .from("user_broker_credentials")
+        .select("credentials")
+        .eq("user_id", userData.user.id)
+        .eq("broker", "coindcx")
+        .eq("is_active", true)
+        .maybeSingle();
+      if (credErr) throw new Error(credErr.message);
+      const creds = credRow?.credentials as { api_key?: string; api_secret?: string } | undefined;
+      if (!creds?.api_key || !creds?.api_secret) {
+        return jsonResponse({ success: false, error: "CoinDCX API keys not configured" }, 400);
+      }
+
+      const balances = await getBalances(creds.api_key, creds.api_secret);
+      const nonZero = balances.filter((b) => b.balance > 0 || b.locked_balance > 0);
+      return jsonResponse({ success: true, balances: nonZero });
+    }
 
     if (action === "place_order") {
       if (!body.trade_id || !body.symbol || !body.side || !body.quantity) {

@@ -196,6 +196,9 @@ function BrokerCredentials() {
 
   const [coindcxKey, setCoindcxKey] = useState('');
   const [coindcxSecret, setCoindcxSecret] = useState('');
+  const [coindcxBalances, setCoindcxBalances] = useState<Array<{ currency: string; balance: number; locked_balance: number }> | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
 
   const [fpClientCode, setFpClientCode] = useState('');
   const [fpPin, setFpPin] = useState('');
@@ -223,6 +226,21 @@ function BrokerCredentials() {
   }, [loadStatus]);
 
   const isConnected = (broker: string) => statuses.some((s) => s.broker === broker && s.is_active);
+
+  const loadCoindcxBalance = async () => {
+    setBalanceLoading(true);
+    setBalanceError(null);
+    const { data, error: fnError } = await supabase.functions.invoke('coindcx-trade', {
+      body: { action: 'get_balance' },
+    });
+    setBalanceLoading(false);
+    if (fnError || !data?.success) {
+      setBalanceError(fnError?.message ?? data?.error ?? 'Failed to fetch balance');
+      setCoindcxBalances(null);
+      return;
+    }
+    setCoindcxBalances(data.balances ?? []);
+  };
 
   const saveCoindcx = async () => {
     setBusyBroker('coindcx');
@@ -336,14 +354,23 @@ function BrokerCredentials() {
               </div>
               <div className="flex gap-2">
                 {isConnected('coindcx') && (
-                  <button
-                    onClick={() => disconnect('coindcx')}
-                    disabled={busyBroker === 'coindcx'}
-                    className="text-xs text-rose-400 hover:text-rose-300 inline-flex items-center gap-1"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Remove
-                  </button>
+                  <>
+                    <button
+                      onClick={loadCoindcxBalance}
+                      disabled={balanceLoading}
+                      className="text-xs text-slate-400 hover:text-white"
+                    >
+                      {balanceLoading ? 'Checking…' : 'Check Balance'}
+                    </button>
+                    <button
+                      onClick={() => disconnect('coindcx')}
+                      disabled={busyBroker === 'coindcx'}
+                      className="text-xs text-rose-400 hover:text-rose-300 inline-flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Remove
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => setOpenForm(openForm === 'coindcx' ? null : 'coindcx')}
@@ -353,6 +380,30 @@ function BrokerCredentials() {
                 </button>
               </div>
             </div>
+            {balanceError && (
+              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
+                {balanceError}
+              </p>
+            )}
+            {coindcxBalances && (
+              <div className="bg-slate-800/40 rounded-lg divide-y divide-slate-700/50">
+                {coindcxBalances.length === 0 ? (
+                  <p className="text-xs text-slate-500 px-3 py-2">No non-zero balances found on this account.</p>
+                ) : (
+                  coindcxBalances.map((b) => (
+                    <div key={b.currency} className="flex items-center justify-between px-3 py-2">
+                      <span className="text-sm text-white font-medium">{b.currency}</span>
+                      <div className="text-right">
+                        <span className="text-sm text-slate-300">{b.balance.toFixed(6)}</span>
+                        {b.locked_balance > 0 && (
+                          <span className="text-xs text-amber-400 ml-2">({b.locked_balance.toFixed(6)} locked)</span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
             {openForm === 'coindcx' && (
               <div className="space-y-2 pt-1">
                 <input

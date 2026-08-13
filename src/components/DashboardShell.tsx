@@ -14,6 +14,7 @@ import {
   X,
   ShieldCheck,
   BarChart3,
+  LineChart,
 } from 'lucide-react';
 
 export type PageId =
@@ -24,7 +25,8 @@ export type PageId =
   | 'portfolio'
   | 'settings'
   | 'admin'
-  | 'backtest';
+  | 'backtest'
+  | 'charts';
 
 interface NavItem {
   id: PageId;
@@ -34,6 +36,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'charts', label: 'Charts', icon: LineChart },
   { id: 'signals', label: 'Signals', icon: Radio },
   { id: 'history', label: 'Trade History', icon: History },
   { id: 'strategies', label: 'Strategies', icon: Settings2 },
