@@ -7,12 +7,19 @@ interface Candle {
   volume: number;
 }
 
+interface OverlayLine {
+  price: number;
+  label: string;
+  color: string;
+}
+
 interface CandlestickChartProps {
   candles: Candle[];
   height?: number;
+  overlays?: OverlayLine[];
 }
 
-export function CandlestickChart({ candles, height = 380 }: CandlestickChartProps) {
+export function CandlestickChart({ candles, height = 380, overlays = [] }: CandlestickChartProps) {
   if (candles.length === 0) {
     return (
       <div style={{ height }} className="flex items-center justify-center text-sm text-slate-500">
@@ -26,19 +33,21 @@ export function CandlestickChart({ candles, height = 380 }: CandlestickChartProp
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
-  const highs = candles.map((c) => c.high);
-  const lows = candles.map((c) => c.low);
+  const overlayPrices = overlays.map((o) => o.price);
+  const highs = [...candles.map((c) => c.high), ...overlayPrices];
+  const lows = [...candles.map((c) => c.low), ...overlayPrices];
   const maxPrice = Math.max(...highs);
   const minPrice = Math.min(...lows);
-  const priceRange = maxPrice - minPrice || 1;
+  const priceRange = (maxPrice - minPrice) * 1.05 || 1; // small headroom so overlay lines near the edge aren't clipped
+  const rangeMin = minPrice - (maxPrice - minPrice) * 0.025;
 
   const candleSlot = chartWidth / candles.length;
   const bodyWidth = Math.max(candleSlot * 0.6, 1);
 
-  const yFor = (price: number) => padding.top + chartHeight - ((price - minPrice) / priceRange) * chartHeight;
+  const yFor = (price: number) => padding.top + chartHeight - ((price - rangeMin) / priceRange) * chartHeight;
 
   const gridLines = 5;
-  const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) => minPrice + (priceRange / gridLines) * i);
+  const gridPrices = Array.from({ length: gridLines + 1 }, (_, i) => rangeMin + (priceRange / gridLines) * i);
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }}>
@@ -90,6 +99,28 @@ export function CandlestickChart({ candles, height = 380 }: CandlestickChartProp
               height={bodyHeight}
               fill={color}
             />
+          </g>
+        );
+      })}
+
+      {/* Overlay lines: entry / stop-loss / take-profit, so the chart shows
+          exactly what the bot is doing on this position */}
+      {overlays.map((o, i) => {
+        const y = yFor(o.price);
+        return (
+          <g key={i}>
+            <line
+              x1={padding.left}
+              y1={y}
+              x2={width - padding.right}
+              y2={y}
+              stroke={o.color}
+              strokeWidth={1.5}
+              strokeDasharray="6 4"
+            />
+            <text x={padding.left + 4} y={y - 4} fontSize={10} fill={o.color} fontWeight={600}>
+              {o.label} {o.price >= 1000 ? o.price.toFixed(2) : o.price.toFixed(6)}
+            </text>
           </g>
         );
       })}

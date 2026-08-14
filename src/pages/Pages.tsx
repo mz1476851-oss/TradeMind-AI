@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { SystemHealthCard } from '@/components/SystemHealthCard';
+import { LiveTradingChart } from '@/components/LiveTradingChart';
 import {
   Radio,
   History,
@@ -169,6 +170,8 @@ export function DashboardPage() {
         <StatCard icon={totalPnl >= 0 ? TrendingUp : TrendingDown} label="Total P&L" value={fmt(totalPnl)} accent={totalPnl >= 0 ? 'emerald' : 'rose'} />
         <StatCard icon={Trophy} label="Win Rate" value={winRate !== null ? `${winRate}%` : '—'} accent="amber" />
       </div>
+
+      <LiveTradingChart />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
