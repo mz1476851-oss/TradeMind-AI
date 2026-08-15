@@ -217,6 +217,24 @@ Deno.serve(async (req: Request) => {
         };
         if (order.avg_price && order.avg_price > 0) {
           updateData.entry_price = order.avg_price;
+
+          // Keep stop_loss/take_profit the correct distance from the REAL
+          // fill price instead of drifting from the theoretical signal-time
+          // entry — see binance-testnet-trade for the same fix and rationale.
+          const { data: existingTrade } = await supabase
+            .from("trades")
+            .select("entry_price, stop_loss, take_profit")
+            .eq("id", body.trade_id)
+            .single();
+          if (existingTrade) {
+            const delta = order.avg_price - Number(existingTrade.entry_price);
+            if (existingTrade.stop_loss !== null) {
+              updateData.stop_loss = Math.round((Number(existingTrade.stop_loss) + delta) * 1000000) / 1000000;
+            }
+            if (existingTrade.take_profit !== null) {
+              updateData.take_profit = Math.round((Number(existingTrade.take_profit) + delta) * 1000000) / 1000000;
+            }
+          }
         }
         await supabase.from("trades").update(updateData).eq("id", body.trade_id);
       }

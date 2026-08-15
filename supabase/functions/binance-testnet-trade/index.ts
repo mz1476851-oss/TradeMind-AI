@@ -257,7 +257,29 @@ Deno.serve(async (req: Request) => {
           broker_order_id: orderResult.orderId,
         };
         if (fillPrice !== null) {
-          updateData.entry_price = Math.round(fillPrice * 1000000) / 1000000;
+          const roundedFill = Math.round(fillPrice * 1000000) / 1000000;
+          updateData.entry_price = roundedFill;
+
+          // The real fill price can differ from the theoretical entry the
+          // stop-loss/take-profit were calculated against (signal-time price
+          // vs actual execution price). Shift SL/TP by the same delta so they
+          // stay the correct distance from the REAL entry, instead of quietly
+          // drifting out of sync with what's now shown as "entry" — e.g. a
+          // take-profit that ends up below entry on a long position.
+          const { data: existingTrade } = await supabase
+            .from("trades")
+            .select("entry_price, stop_loss, take_profit")
+            .eq("id", body.trade_id)
+            .single();
+          if (existingTrade) {
+            const delta = roundedFill - Number(existingTrade.entry_price);
+            if (existingTrade.stop_loss !== null) {
+              updateData.stop_loss = Math.round((Number(existingTrade.stop_loss) + delta) * 1000000) / 1000000;
+            }
+            if (existingTrade.take_profit !== null) {
+              updateData.take_profit = Math.round((Number(existingTrade.take_profit) + delta) * 1000000) / 1000000;
+            }
+          }
         }
 
         await supabase
