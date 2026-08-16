@@ -71,8 +71,19 @@ export function LiveTradingChart() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 30000); // catch newly opened/closed trades quickly
-    return () => clearInterval(interval);
+
+    // Realtime: pick up newly opened/closed trades the instant they happen,
+    // instead of waiting for the next poll.
+    const channel = supabase
+      .channel('live-trading-trades')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => {
+        load();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [load]);
 
   const selectedTrade = openTrades.find((t) => t.id === selectedTradeId);
@@ -93,10 +104,19 @@ export function LiveTradingChart() {
       if (!cancelled) setCandles((data as Candle[]) ?? []);
     };
     loadCandles();
-    const interval = setInterval(loadCandles, 60000);
+
+    const channel = supabase
+      .channel(`live-chart-candles-${selectedTrade.asset_id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'market_data', filter: `asset_id=eq.${selectedTrade.asset_id}` },
+        () => loadCandles(),
+      )
+      .subscribe();
+
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      supabase.removeChannel(channel);
     };
   }, [selectedTrade?.asset_id]);
 
@@ -169,6 +189,24 @@ export function LiveTradingChart() {
             <span className="text-xs px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-400">
               {MODE_LABELS[selectedTrade.execution_mode] ?? selectedTrade.execution_mode}
             </span>
+            {(() => {
+              const currentPrice = candles[candles.length - 1]?.close;
+              if (!currentPrice) return null;
+              const diff = selectedTrade.trade_type === 'long'
+                ? currentPrice - selectedTrade.entry_price
+                : selectedTrade.entry_price - currentPrice;
+              const unrealizedPnl = diff * selectedTrade.quantity;
+              const pnlPct = (diff / selectedTrade.entry_price) * 100;
+              return (
+                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                  unrealizedPnl >= 0
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                }`}>
+                  Live P&L: {unrealizedPnl >= 0 ? '+' : ''}{unrealizedPnl.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                </span>
+              );
+            })()}
             <span className="text-xs text-slate-500 ml-auto">
               Entry {selectedTrade.entry_price >= 1000 ? selectedTrade.entry_price.toFixed(2) : selectedTrade.entry_price.toFixed(6)} · Qty {selectedTrade.quantity}
             </span>

@@ -49,10 +49,19 @@ export function NotificationBell() {
 
   useEffect(() => {
     load();
-    // Poll every 30s — simple and reliable without needing a realtime subscription.
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, [load]);
+    if (!user) return;
+    const channel = supabase
+      .channel('notifications-live')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        () => load(),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [load, user]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

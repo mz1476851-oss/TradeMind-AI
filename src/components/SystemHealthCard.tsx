@@ -70,8 +70,15 @@ export function SystemHealthCard() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 60000); // refresh every minute, no manual checking needed
-    return () => clearInterval(interval);
+    const channel = supabase
+      .channel('pipeline-runs-live')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pipeline_runs' }, () => {
+        load();
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [load]);
 
   const isStale = (run: PipelineRun | null, jobName: string) => {

@@ -91,7 +91,17 @@ export function DashboardPage() {
     setClosedTrades((closedRes.data as Trade[]) ?? []);
   }, [user]);
 
-  useEffect(() => { loadDashboardData(); }, [loadDashboardData]);
+  useEffect(() => {
+    loadDashboardData();
+    const channel = supabase
+      .channel('dashboard-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => loadDashboardData())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals' }, () => loadDashboardData())
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadDashboardData]);
 
   const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
   const wins = closedTrades.filter((t) => (t.pnl ?? 0) > 0).length;

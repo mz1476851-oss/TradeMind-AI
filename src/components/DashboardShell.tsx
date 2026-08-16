@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { NotificationBell } from '@/components/NotificationBell';
+import { LiveTickerBar } from '@/components/LiveTickerBar';
 import {
   LayoutDashboard,
   Radio,
@@ -134,6 +135,8 @@ export function DashboardShell({
             </div>
           </div>
         </header>
+
+        <LiveTickerBar />
 
         {/* Content */}
         <main className="flex-1 p-4 md:p-6 overflow-auto">{children}</main>

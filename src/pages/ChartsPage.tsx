@@ -77,10 +77,17 @@ export function ChartsPage() {
 
   useEffect(() => {
     if (selectedAssetId) loadCandles(selectedAssetId);
-    const interval = setInterval(() => {
-      if (selectedAssetId) loadCandles(selectedAssetId);
-    }, 60000); // auto-refresh every minute — matches the 2-min collection cadence closely enough
-    return () => clearInterval(interval);
+    const channel = supabase
+      .channel(`charts-candles-${selectedAssetId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'market_data', filter: `asset_id=eq.${selectedAssetId}` },
+        () => loadCandles(selectedAssetId),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [selectedAssetId, loadCandles]);
 
   const activeTimeframe = TIMEFRAMES.find((t) => t.id === timeframe) ?? TIMEFRAMES[0];
