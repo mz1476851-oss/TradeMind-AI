@@ -946,6 +946,23 @@ async function executeStrategies(
     }
   }
 
+  // Self-learning filter: pull each asset's own backtested track record so
+  // the bot can favor signal_terms it has actually been right about, instead
+  // of trusting every signal equally regardless of that asset's real history.
+  const { data: accuracyRows } = await supabase
+    .from("strategy_accuracy")
+    .select("asset_id, signal_term, win_rate_pct, total_signals_tested")
+    .order("calculated_at", { ascending: false });
+  const accuracyMap = new Map<string, { winRate: number; sampleSize: number }>();
+  for (const row of (accuracyRows ?? []) as Array<{ asset_id: string; signal_term: string; win_rate_pct: number; total_signals_tested: number }>) {
+    const key = `${row.asset_id}:${row.signal_term}`;
+    if (!accuracyMap.has(key)) {
+      accuracyMap.set(key, { winRate: row.win_rate_pct, sampleSize: row.total_signals_tested });
+    }
+  }
+  const MIN_SAMPLE_FOR_TRUST = 8; // don't judge an asset on too few historical signals
+  const MIN_ACCEPTABLE_WIN_RATE = 35; // below this, the asset's own history says this setup doesn't work
+
   for (const strategy of strategies as StrategyRow[]) {
     const profile = profileMap.get(strategy.user_id);
     if (!profile) {
@@ -999,6 +1016,12 @@ async function executeStrategies(
       if (cooldownUntil && cooldownUntil > Date.now()) {
         const minutesLeft = Math.ceil((cooldownUntil - Date.now()) / 60000);
         skipped.push(`${ind.asset.symbol}: re-entry cooldown active (${minutesLeft}m left) after its last close on this strategy`);
+        continue;
+      }
+
+      const accuracy = accuracyMap.get(`${assetId}:${signalTerm}`);
+      if (accuracy && accuracy.sampleSize >= MIN_SAMPLE_FOR_TRUST && accuracy.winRate < MIN_ACCEPTABLE_WIN_RATE) {
+        skipped.push(`${ind.asset.symbol}: self-learning filter — this asset's ${signalTerm} signals have only a ${accuracy.winRate.toFixed(0)}% win rate over ${accuracy.sampleSize} tested signals, below the ${MIN_ACCEPTABLE_WIN_RATE}% trust threshold`);
         continue;
       }
 
