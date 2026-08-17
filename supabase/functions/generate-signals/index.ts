@@ -44,6 +44,7 @@ interface StrategyRow {
   watched_markets: string[];
   watched_asset_ids: string[];
   execution_target: string;
+  reentry_cooldown_minutes: number;
 }
 
 interface ProfileRow {
@@ -51,6 +52,8 @@ interface ProfileRow {
   virtual_capital: number;
   max_concurrent_positions: number;
   daily_loss_limit_pct: number;
+  equity_peak: number | null;
+  profit_protection_pct: number;
 }
 
 interface GeneratedSignal {
@@ -899,7 +902,7 @@ async function executeStrategies(
   const userIds = [...new Set(strategies.map((s) => s.user_id))];
   const { data: profiles } = await supabase
     .from("users_profile")
-    .select("user_id, virtual_capital, max_concurrent_positions, daily_loss_limit_pct")
+    .select("user_id, virtual_capital, max_concurrent_positions, daily_loss_limit_pct, equity_peak, profit_protection_pct")
     .in("user_id", userIds);
 
   const profileMap = new Map<string, ProfileRow>();
@@ -920,6 +923,29 @@ async function executeStrategies(
     (existingTrades ?? []).map((t: { strategy_id: string | null; asset_id: string }) => `${t.strategy_id}:${t.asset_id}`),
   );
 
+  // Pre-fetch recently closed trades to enforce a per-(strategy, asset)
+  // re-entry cooldown — stops the bot from immediately re-opening the same
+  // asset right after a stop-out in a choppy range, which was the main
+  // driver behind winning runs bleeding back out in small losses.
+  const strategyCooldownMinutes = new Map((strategies as StrategyRow[]).map((s) => [s.id, s.reentry_cooldown_minutes ?? 30]));
+  const maxCooldownMinutes = Math.max(...Array.from(strategyCooldownMinutes.values()), 30);
+  const { data: recentlyClosed } = await supabase
+    .from("trades")
+    .select("strategy_id, asset_id, closed_at")
+    .eq("status", "closed")
+    .gte("closed_at", new Date(Date.now() - maxCooldownMinutes * 60000).toISOString());
+  const reentryCooldownMap = new Map<string, number>();
+  for (const t of (recentlyClosed ?? []) as Array<{ strategy_id: string | null; asset_id: string; closed_at: string | null }>) {
+    if (!t.strategy_id || !t.closed_at) continue;
+    const key = `${t.strategy_id}:${t.asset_id}`;
+    const cooldownMin = strategyCooldownMinutes.get(t.strategy_id) ?? 30;
+    const cooldownUntil = new Date(t.closed_at).getTime() + cooldownMin * 60000;
+    const existing = reentryCooldownMap.get(key);
+    if (!existing || cooldownUntil > existing) {
+      reentryCooldownMap.set(key, cooldownUntil);
+    }
+  }
+
   for (const strategy of strategies as StrategyRow[]) {
     const profile = profileMap.get(strategy.user_id);
     if (!profile) {
@@ -938,6 +964,24 @@ async function executeStrategies(
     let riskLimitNotified = false;
     const skipped: string[] = [];
 
+    // Profit protection: if equity has drawn down too far from its own peak,
+    // pause new trades for this user entirely until it recovers. This is
+    // what stops a winning run from quietly bleeding back to breakeven or
+    // worse through a string of small losses.
+    const equityPeak = Number(profile.equity_peak ?? profile.virtual_capital);
+    const protectionPct = Number(profile.profit_protection_pct ?? 15);
+    const currentDrawdownPct = equityPeak > 0 ? ((equityPeak - profile.virtual_capital) / equityPeak) * 100 : 0;
+    if (currentDrawdownPct >= protectionPct) {
+      results.push({
+        strategy_id: strategy.id,
+        strategy_name: strategy.name,
+        trades_created: 0,
+        suggestions_created: 0,
+        skipped: [`profit protection active: equity is ${currentDrawdownPct.toFixed(1)}% below its peak (limit ${protectionPct}%) — no new trades until it recovers`],
+      });
+      continue;
+    }
+
     for (const [assetId, ind] of indicators) {
       if (!assetMatchesStrategy(ind.asset, strategy)) continue;
 
@@ -948,6 +992,13 @@ async function executeStrategies(
 
       if (openPositionKeys.has(`${strategy.id}:${assetId}`)) {
         skipped.push(`${ind.asset.symbol}: already has an open/pending position for this strategy`);
+        continue;
+      }
+
+      const cooldownUntil = reentryCooldownMap.get(`${strategy.id}:${assetId}`);
+      if (cooldownUntil && cooldownUntil > Date.now()) {
+        const minutesLeft = Math.ceil((cooldownUntil - Date.now()) / 60000);
+        skipped.push(`${ind.asset.symbol}: re-entry cooldown active (${minutesLeft}m left) after its last close on this strategy`);
         continue;
       }
 

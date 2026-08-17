@@ -349,18 +349,36 @@ Deno.serve(async (req: Request) => {
       // Load current profile
       const { data: profile } = await supabase
         .from("users_profile")
-        .select("user_id, virtual_capital")
+        .select("user_id, virtual_capital, equity_peak, profit_protection_pct")
         .eq("user_id", userId)
         .maybeSingle();
 
       if (!profile) continue;
 
       const newCapital = Number(profile.virtual_capital) + pnlDelta;
+      const priorPeak = Number(profile.equity_peak ?? profile.virtual_capital);
+      const newPeak = Math.max(priorPeak, newCapital);
 
       await supabase
         .from("users_profile")
-        .update({ virtual_capital: newCapital })
+        .update({ virtual_capital: newCapital, equity_peak: newPeak })
         .eq("user_id", userId);
+
+      // If this close just pushed equity below the protection threshold
+      // (having previously been higher), let the user know trading will
+      // pause until it recovers — this is the account-level circuit breaker
+      // that stops a winning run from quietly bleeding back out.
+      const protectionPct = Number(profile.profit_protection_pct ?? 15);
+      const drawdownFromPeak = newPeak > 0 ? ((newPeak - newCapital) / newPeak) * 100 : 0;
+      if (drawdownFromPeak >= protectionPct) {
+        await notify(
+          supabase,
+          userId,
+          "risk_limit_hit",
+          "Profit protection triggered",
+          `Equity has drawn down ${drawdownFromPeak.toFixed(1)}% from its peak (${newPeak.toFixed(2)}). New trades are paused until it recovers.`,
+        );
+      }
 
       // Count remaining open trades for snapshot
       const { count: openCount } = await supabase
