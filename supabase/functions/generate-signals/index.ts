@@ -79,6 +79,19 @@ function smaAt(values: number[], period: number, endIdx: number): number | null 
   return sum / period;
 }
 
+type MarketRegime = "trending" | "ranging" | "unknown";
+
+// A lightweight regime read using only EMA9/21 spread (needs far less history
+// than SMA50/200, so it's usable almost immediately on a new asset). Wide EMA
+// separation relative to price = trending; EMAs bunched together = ranging/
+// choppy, which is exactly the condition that produced the BNB whipsaw
+// losses observed earlier — dampening confidence there directly targets that.
+function detectRegime(ind: { ema9: number | null; ema21: number | null; lastClose: number }): MarketRegime {
+  if (ind.ema9 === null || ind.ema21 === null || ind.lastClose <= 0) return "unknown";
+  const spreadPct = (Math.abs(ind.ema9 - ind.ema21) / ind.lastClose) * 100;
+  return spreadPct > 0.4 ? "trending" : "ranging";
+}
+
 function ema(values: number[], period: number): number | null {
   if (values.length < period) return null;
   const k = 2 / (period + 1);
@@ -1049,9 +1062,16 @@ async function executeStrategies(
       const stopLoss = isBuy ? entryPrice - atrDistance : entryPrice + atrDistance;
       const takeProfit = isBuy ? entryPrice + atrDistance * 2 : entryPrice - atrDistance * 2;
 
+      // Adaptive sizing: scale the risk allocation itself by how confident
+      // this particular signal is (0.5x at the low end, up to the full
+      // configured risk % at 100 confidence), instead of always risking the
+      // same amount regardless of how strong the setup actually looks.
+      const confidenceMultiplier = 0.5 + (signal.confidence_score / 100) * 0.5;
+      const adjustedRiskPct = strategy.risk_per_trade_pct * confidenceMultiplier;
+
       const { quantity } = calculatePositionSize(
         profile.virtual_capital,
-        strategy.risk_per_trade_pct,
+        adjustedRiskPct,
         entryPrice,
         stopLoss,
       );
@@ -1325,6 +1345,21 @@ Deno.serve(async (req: Request) => {
     const indicators = new Map<string, AssetIndicator>();
     const signalsByAsset = new Map<string, { short_term: string; long_term: string }>();
 
+    // Correlation-aware risk: read BTC's own short-term signal once up front
+    // so other crypto assets can be dampened when they'd fight a strong BTC
+    // move — alts falling with BTC (and vice versa) is a well-known pattern,
+    // and ignoring it was letting the bot open longs into BTC-led sell-offs.
+    let btcSignal: { type: string; confidence: number } | null = null;
+    const btcAsset = (assets as AssetRow[]).find((a) => a.symbol === "BTC/USD");
+    if (btcAsset) {
+      const btcCandles = allCandles.get(btcAsset.id);
+      if (btcCandles && btcCandles.length >= 35) {
+        const btcInd = computeAllIndicators(btcCandles);
+        const btcSt = shortTermScore(btcInd);
+        btcSignal = { type: btcSt.signal_type, confidence: btcSt.confidence_score };
+      }
+    }
+
     for (const asset of assets as AssetRow[]) {
       const candles = allCandles.get(asset.id);
       if (!candles || candles.length < 35) {
@@ -1334,8 +1369,37 @@ Deno.serve(async (req: Request) => {
 
       const ind = computeAllIndicators(candles);
       const htfTrend = higherTimeframeTrend(candles);
-      const st = applyMtfConfirmation(shortTermScore(ind), htfTrend);
+      let st = applyMtfConfirmation(shortTermScore(ind), htfTrend);
       const lt = longTermScore(ind);
+
+      // Regime dampening: EMAs bunched together (ranging/choppy) is exactly
+      // the condition that produced repeated small-loss whipsaws earlier —
+      // trust momentum signals less when the market isn't actually trending.
+      const regime = detectRegime(ind);
+      if (regime === "ranging" && st.signal_type !== "hold") {
+        st = {
+          ...st,
+          confidence_score: Math.round(st.confidence_score * 0.75),
+          reasoning_text: `${st.reasoning_text}. Ranging market (EMA9/21 bunched) — confidence reduced`,
+        };
+      }
+
+      // BTC correlation dampening for other crypto assets.
+      if (btcSignal && asset.market_type === "crypto" && asset.symbol !== "BTC/USD" && btcSignal.confidence >= 50) {
+        if (btcSignal.type === "sell" && st.signal_type === "buy") {
+          st = {
+            ...st,
+            confidence_score: Math.round(st.confidence_score * 0.6),
+            reasoning_text: `${st.reasoning_text}. BTC showing a bearish signal — long confidence reduced`,
+          };
+        } else if (btcSignal.type === "buy" && st.signal_type === "sell") {
+          st = {
+            ...st,
+            confidence_score: Math.round(st.confidence_score * 0.6),
+            reasoning_text: `${st.reasoning_text}. BTC showing a bullish signal — short confidence reduced`,
+          };
+        }
+      }
 
       const atrPct = ind.atrVal !== null && ind.lastClose > 0
         ? (ind.atrVal / ind.lastClose) * 100

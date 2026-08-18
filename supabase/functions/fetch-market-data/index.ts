@@ -274,6 +274,19 @@ Deno.serve(async (req: Request) => {
       errors: errors.length > 0 ? errors : undefined,
     });
 
+    // Chain position monitoring right after fresh prices land, instead of
+    // waiting for its own separate 5-minute cron tick. This is the closest
+    // practical equivalent to real-time SL/TP reaction available in a
+    // serverless (no persistent WebSocket) architecture — positions get
+    // checked against the newest price within seconds, not minutes.
+    fetch(`${supabaseUrl}/functions/v1/check-open-trades`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${serviceKey}` },
+      body: "{}",
+    }).catch(() => {
+      // fire-and-forget — its own cron run will still catch anything missed
+    });
+
     return new Response(
       JSON.stringify({
         success: true,
