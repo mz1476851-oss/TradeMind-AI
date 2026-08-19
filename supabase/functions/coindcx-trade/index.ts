@@ -47,23 +47,54 @@ interface CoindcxOrder {
   avg_price: number;
 }
 
+// Retries only transient failures — network errors, 5xx, and 429 (rate
+// limit). A 4xx like bad signature or insufficient balance won't fix itself
+// on retry, so those fail immediately instead of wasting attempts.
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 400;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function signedPost(path: string, apiKey: string, apiSecret: string, body: Record<string, unknown>) {
   const jsonBody = JSON.stringify(body);
   const signature = await hmacSha256Hex(apiSecret, jsonBody);
-  const response = await fetch(`${COINDCX_BASE}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-AUTH-APIKEY": apiKey,
-      "X-AUTH-SIGNATURE": signature,
-    },
-    body: jsonBody,
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(`CoinDCX request failed (${response.status}): ${JSON.stringify(data)}`);
+
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(`${COINDCX_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-AUTH-APIKEY": apiKey,
+          "X-AUTH-SIGNATURE": signature,
+        },
+        body: jsonBody,
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        const transient = response.status === 429 || response.status >= 500;
+        const err = new Error(`CoinDCX request failed (${response.status}): ${JSON.stringify(data)}`);
+        if (!transient || attempt === MAX_RETRIES) throw err;
+        lastError = err;
+        await sleep(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+
+      return data;
+    } catch (err) {
+      // Network-level failure (fetch itself threw) — always worth retrying.
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt === MAX_RETRIES) throw lastError;
+      await sleep(BASE_DELAY_MS * 2 ** attempt);
+    }
   }
-  return data;
+
+  throw lastError ?? new Error("CoinDCX request failed after retries");
 }
 
 interface CoindcxBalance {

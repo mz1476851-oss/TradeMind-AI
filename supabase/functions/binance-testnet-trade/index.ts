@@ -60,6 +60,16 @@ interface BinanceOrderResponse {
   msg?: string;
 }
 
+// Retries only transient failures (network errors, 5xx, 429 rate-limit).
+// A rejected order (bad signature, insufficient balance, LOT_SIZE, etc.) is a
+// 4xx that won't change on retry, so those throw immediately.
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 400;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function placeMarketOrder(
   apiKey: string,
   secretKey: string,
@@ -69,31 +79,49 @@ async function placeMarketOrder(
 ): Promise<BinanceOrderResponse> {
   const roundedQuantity = await roundToLotSize(symbol, quantity);
 
-  const timestamp = Date.now().toString();
-  const params: Record<string, string> = {
-    symbol: symbol.toUpperCase(),
-    side,
-    type: "MARKET",
-    quantity: roundedQuantity,
-    timestamp,
-    recvWindow: "10000",
-  };
-  const query = buildQueryString(params);
-  const signature = await hmacSha256(secretKey, query);
+  let lastError: Error | null = null;
 
-  const url = `${BINANCE_BASE}/api/v3/order?${query}&signature=${signature}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-MBX-APIKEY": apiKey,
-    },
-  });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Timestamp + signature must be freshly generated on every attempt —
+    // Binance rejects requests whose timestamp drifts outside recvWindow.
+    const timestamp = Date.now().toString();
+    const params: Record<string, string> = {
+      symbol: symbol.toUpperCase(),
+      side,
+      type: "MARKET",
+      quantity: roundedQuantity,
+      timestamp,
+      recvWindow: "10000",
+    };
+    const query = buildQueryString(params);
+    const signature = await hmacSha256(secretKey, query);
+    const url = `${BINANCE_BASE}/api/v3/order?${query}&signature=${signature}`;
 
-  const data = await response.json() as BinanceOrderResponse;
-  if (!response.ok) {
-    throw new Error(`Binance order failed (${response.status}): ${data.msg ?? JSON.stringify(data)}`);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "X-MBX-APIKEY": apiKey },
+      });
+      const data = await response.json() as BinanceOrderResponse;
+
+      if (!response.ok) {
+        const transient = response.status === 429 || response.status >= 500;
+        const err = new Error(`Binance order failed (${response.status}): ${data.msg ?? JSON.stringify(data)}`);
+        if (!transient || attempt === MAX_RETRIES) throw err;
+        lastError = err;
+        await sleep(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+
+      return data;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt === MAX_RETRIES) throw lastError;
+      await sleep(BASE_DELAY_MS * 2 ** attempt);
+    }
   }
-  return data;
+
+  throw lastError ?? new Error("Binance order failed after retries");
 }
 
 // Binance rejects any quantity that isn't an exact multiple of the symbol's

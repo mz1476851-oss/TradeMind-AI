@@ -1,8 +1,108 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import type { Trade, Asset, PortfolioSnapshot } from '@/lib/types';
-import { Briefcase, TrendingUp, TrendingDown, DollarSign, Activity, Globe, Sparkles } from 'lucide-react';
+import { Briefcase, TrendingUp, TrendingDown, DollarSign, Activity, Globe, Sparkles, Gauge, ArrowDownRight, Flame } from 'lucide-react';
+
+// ---- Portfolio analytics: Sharpe ratio, max drawdown, win/loss streaks ----
+// All computed client-side from the trades/snapshots already being fetched —
+// no new tables or edge functions needed.
+
+interface PortfolioAnalytics {
+  sharpeRatio: number | null;
+  maxDrawdownPct: number | null;
+  maxDrawdownAbs: number | null;
+  currentStreak: { type: 'win' | 'loss' | null; count: number };
+  longestWinStreak: number;
+  longestLossStreak: number;
+  totalPnl: number;
+  profitFactor: number | null;
+}
+
+function computeAnalytics(closedTrades: Trade[], snapshots: PortfolioSnapshot[]): PortfolioAnalytics {
+  // Sharpe ratio — from per-trade returns (%), annualized isn't meaningful
+  // here since trade frequency varies wildly, so this reports the raw
+  // risk-adjusted ratio (mean return / stdev of returns) across closed trades.
+  // Needs at least a few trades or the stdev is noise.
+  const returns = closedTrades
+    .map((t) => {
+      const base = t.entry_price * t.quantity;
+      return base > 0 ? t.pnl / base : 0;
+    })
+    .filter((r) => Number.isFinite(r));
+
+  let sharpeRatio: number | null = null;
+  if (returns.length >= 5) {
+    const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+    const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+    const stdev = Math.sqrt(variance);
+    sharpeRatio = stdev > 0 ? mean / stdev : null;
+  }
+
+  // Max drawdown — from the portfolio value snapshot history (oldest to
+  // newest), the largest peak-to-trough decline observed.
+  let maxDrawdownPct: number | null = null;
+  let maxDrawdownAbs: number | null = null;
+  if (snapshots.length >= 2) {
+    const chronological = [...snapshots].reverse().map((s) => s.total_value);
+    let peak = chronological[0];
+    let worstPct = 0;
+    let worstAbs = 0;
+    for (const value of chronological) {
+      if (value > peak) peak = value;
+      const drawdownAbs = peak - value;
+      const drawdownPct = peak > 0 ? drawdownAbs / peak : 0;
+      if (drawdownPct > worstPct) {
+        worstPct = drawdownPct;
+        worstAbs = drawdownAbs;
+      }
+    }
+    maxDrawdownPct = worstPct;
+    maxDrawdownAbs = worstAbs;
+  }
+
+  // Win/loss streaks — walk closed trades in chronological order (oldest
+  // first) since that's the order the streak actually happened in.
+  const chronologicalTrades = [...closedTrades]
+    .filter((t) => t.closed_at)
+    .sort((a, b) => new Date(a.closed_at!).getTime() - new Date(b.closed_at!).getTime());
+
+  let longestWinStreak = 0;
+  let longestLossStreak = 0;
+  let runType: 'win' | 'loss' | null = null;
+  let runCount = 0;
+
+  for (const t of chronologicalTrades) {
+    const isWin = t.pnl > 0;
+    const thisType: 'win' | 'loss' = isWin ? 'win' : 'loss';
+    if (thisType === runType) {
+      runCount += 1;
+    } else {
+      runType = thisType;
+      runCount = 1;
+    }
+    if (thisType === 'win') longestWinStreak = Math.max(longestWinStreak, runCount);
+    else longestLossStreak = Math.max(longestLossStreak, runCount);
+  }
+
+  const currentStreak = { type: runType, count: runCount };
+
+  const totalPnl = closedTrades.reduce((s, t) => s + t.pnl, 0);
+  const grossProfit = closedTrades.filter((t) => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = Math.abs(closedTrades.filter((t) => t.pnl < 0).reduce((s, t) => s + t.pnl, 0));
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : null;
+
+  return {
+    sharpeRatio,
+    maxDrawdownPct,
+    maxDrawdownAbs,
+    currentStreak,
+    longestWinStreak,
+    longestLossStreak,
+    totalPnl,
+    profitFactor,
+  };
+}
 
 export function PortfolioPage() {
   const { user, profile } = useAuth();
@@ -94,6 +194,11 @@ export function PortfolioPage() {
   const sparkValues = snapshots.length > 0
     ? snapshots.map((s) => s.total_value).reverse()
     : [capital];
+
+  const analytics = useMemo(
+    () => computeAnalytics(closedTrades, snapshots),
+    [closedTrades, snapshots],
+  );
 
   return (
     <div className="space-y-6">
@@ -207,6 +312,97 @@ export function PortfolioPage() {
           </div>
 
           <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
+            <div className="flex items-center gap-2 mb-1">
+              <Gauge className="w-4 h-4 text-sky-400" />
+              <h3 className="text-sm font-semibold text-white">Performance Analytics</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Risk-adjusted performance metrics computed from your closed trade history.
+            </p>
+            {totalClosed < 5 ? (
+              <p className="text-sm text-slate-500 py-4">
+                Close at least 5 trades to unlock Sharpe ratio and streak analytics.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <AnalyticStat
+                  label="Sharpe Ratio"
+                  value={analytics.sharpeRatio !== null ? analytics.sharpeRatio.toFixed(2) : '—'}
+                  hint="Return / volatility, per trade"
+                  tone={
+                    analytics.sharpeRatio === null
+                      ? 'slate'
+                      : analytics.sharpeRatio >= 0.5
+                        ? 'emerald'
+                        : analytics.sharpeRatio >= 0
+                          ? 'amber'
+                          : 'rose'
+                  }
+                  icon={Gauge}
+                />
+                <AnalyticStat
+                  label="Max Drawdown"
+                  value={
+                    analytics.maxDrawdownPct !== null
+                      ? `-${(analytics.maxDrawdownPct * 100).toFixed(1)}%`
+                      : '—'
+                  }
+                  hint={analytics.maxDrawdownAbs !== null ? fmt(analytics.maxDrawdownAbs) : 'Not enough history'}
+                  tone={
+                    analytics.maxDrawdownPct === null
+                      ? 'slate'
+                      : analytics.maxDrawdownPct <= 0.1
+                        ? 'emerald'
+                        : analytics.maxDrawdownPct <= 0.25
+                          ? 'amber'
+                          : 'rose'
+                  }
+                  icon={ArrowDownRight}
+                />
+                <AnalyticStat
+                  label="Profit Factor"
+                  value={analytics.profitFactor !== null ? analytics.profitFactor.toFixed(2) : '—'}
+                  hint="Gross profit / gross loss"
+                  tone={
+                    analytics.profitFactor === null
+                      ? 'slate'
+                      : analytics.profitFactor >= 1.5
+                        ? 'emerald'
+                        : analytics.profitFactor >= 1
+                          ? 'amber'
+                          : 'rose'
+                  }
+                  icon={TrendingUp}
+                />
+                <AnalyticStat
+                  label="Current Streak"
+                  value={
+                    analytics.currentStreak.type
+                      ? `${analytics.currentStreak.count} ${analytics.currentStreak.type === 'win' ? 'win' : 'loss'}${analytics.currentStreak.count > 1 ? 's' : ''}`
+                      : '—'
+                  }
+                  hint={`Best: ${analytics.longestWinStreak}W / ${analytics.longestLossStreak}L`}
+                  tone={
+                    analytics.currentStreak.type === 'win'
+                      ? 'emerald'
+                      : analytics.currentStreak.type === 'loss'
+                        ? 'rose'
+                        : 'slate'
+                  }
+                  icon={Flame}
+                />
+                <AnalyticStat
+                  label="Total Realized P&L"
+                  value={fmt(analytics.totalPnl)}
+                  hint={`Across ${totalClosed} closed trades`}
+                  tone={analytics.totalPnl >= 0 ? 'emerald' : 'rose'}
+                  icon={DollarSign}
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
             <h3 className="text-sm font-semibold text-white mb-4">Open Positions</h3>
             {openTrades.length === 0 ? (
               <p className="text-sm text-slate-500 text-center py-8">No open positions.</p>
@@ -276,6 +472,37 @@ function StatCard({
         <p className="text-xs text-slate-400">{label}</p>
       </div>
       <p className={`text-xl font-bold ${colors[accent]}`}>{value}</p>
+    </div>
+  );
+}
+
+function AnalyticStat({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  icon: typeof Gauge;
+  label: string;
+  value: string;
+  hint: string;
+  tone: 'emerald' | 'amber' | 'rose' | 'slate';
+}) {
+  const colors: Record<string, string> = {
+    emerald: 'text-emerald-400',
+    amber: 'text-amber-400',
+    rose: 'text-rose-400',
+    slate: 'text-slate-300',
+  };
+  return (
+    <div className="bg-slate-800/40 rounded-xl p-3.5">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Icon className={`w-3.5 h-3.5 ${colors[tone]}`} />
+        <p className="text-xs text-slate-500">{label}</p>
+      </div>
+      <p className={`text-lg font-bold ${colors[tone]}`}>{value}</p>
+      <p className="text-[11px] text-slate-500 mt-0.5">{hint}</p>
     </div>
   );
 }

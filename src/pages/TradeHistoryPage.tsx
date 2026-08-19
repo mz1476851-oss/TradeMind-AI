@@ -2,7 +2,53 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import type { Trade, Asset } from '@/lib/types';
-import { History, TrendingUp, TrendingDown, Clock, Globe, Coins, Landmark } from 'lucide-react';
+import { History, TrendingUp, TrendingDown, Clock, Globe, Coins, Landmark, Download } from 'lucide-react';
+
+// Quotes/escapes a single CSV field per RFC 4180 — wrap in quotes and escape
+// embedded quotes whenever the value could otherwise break column alignment.
+function csvField(value: string | number | null): string {
+  const str = value === null ? '' : String(value);
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function exportTradesToCsv(trades: Trade[], assets: Record<string, Asset>) {
+  const headers = [
+    'Asset', 'Market', 'Type', 'Status', 'Mode', 'Entry Price', 'Exit Price',
+    'Quantity', 'Stop Loss', 'Take Profit', 'P&L', 'Opened At', 'Closed At',
+  ];
+
+  const rows = trades.map((t) => {
+    const asset = assets[t.asset_id];
+    return [
+      csvField(asset?.symbol ?? '?'),
+      csvField(asset?.market_type ?? ''),
+      csvField(t.trade_type),
+      csvField(t.status),
+      csvField(t.execution_mode ?? 'paper'),
+      csvField(t.entry_price),
+      csvField(t.exit_price),
+      csvField(t.quantity),
+      csvField(t.stop_loss),
+      csvField(t.take_profit),
+      csvField(t.status === 'closed' ? t.pnl : ''),
+      csvField(t.opened_at ?? ''),
+      csvField(t.closed_at ?? ''),
+    ].join(',');
+  });
+
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `trademind-trades-${dateStr}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
 
 export function TradeHistoryPage() {
   const { user } = useAuth();
@@ -64,7 +110,7 @@ export function TradeHistoryPage() {
           <h1 className="text-2xl font-bold text-white">Trade History</h1>
           <p className="text-sm text-slate-400 mt-1">All your paper trades — open, closed, and pending.</p>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {(['all', 'open', 'pending', 'closed'] as const).map((f) => (
             <button
               key={f}
@@ -78,6 +124,14 @@ export function TradeHistoryPage() {
               {f}
             </button>
           ))}
+          <button
+            onClick={() => exportTradesToCsv(trades, assets)}
+            disabled={trades.length === 0}
+            className="ml-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-600/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export CSV
+          </button>
         </div>
       </div>
 

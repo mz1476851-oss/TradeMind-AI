@@ -81,6 +81,38 @@ async function generateTotp(secret: string): Promise<string> {
   return (binCode % 1_000_000).toString().padStart(6, "0");
 }
 
+// Retries transient network/server failures (fetch throwing, 5xx, 429).
+// TOTP login isn't retried on a fresh code inside this helper — the caller
+// regenerates a new TOTP each login attempt anyway since login is only
+// called once per trade, so a network-level retry here is still safe within
+// the ~30s TOTP validity window.
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 400;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(url, init);
+      if (resp.status === 429 || resp.status >= 500) {
+        if (attempt === MAX_RETRIES) return resp;
+        await sleep(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt === MAX_RETRIES) throw lastError;
+      await sleep(BASE_DELAY_MS * 2 ** attempt);
+    }
+  }
+  throw lastError ?? new Error("5paisa request failed after retries");
+}
+
 async function loginAndGetAccessToken(creds: FivepaisaCreds): Promise<string> {
   if (!creds.client_code || !creds.pin || !creds.totp_secret || !creds.user_key || !creds.encryption_key || !creds.user_id) {
     throw new Error("5paisa credentials incomplete — need client_code, pin, totp_secret, user_key, encryption_key, user_id");
@@ -89,7 +121,7 @@ async function loginAndGetAccessToken(creds: FivepaisaCreds): Promise<string> {
   const totp = await generateTotp(creds.totp_secret);
 
   // Step 1: TOTP login -> RequestToken
-  const totpResp = await fetch(`${FIVEPAISA_BASE}/TOTPLogin`, {
+  const totpResp = await fetchWithRetry(`${FIVEPAISA_BASE}/TOTPLogin`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -109,7 +141,7 @@ async function loginAndGetAccessToken(creds: FivepaisaCreds): Promise<string> {
   }
 
   // Step 2: Exchange RequestToken for AccessToken
-  const tokenResp = await fetch(`${FIVEPAISA_BASE}/GetAccessToken`, {
+  const tokenResp = await fetchWithRetry(`${FIVEPAISA_BASE}/GetAccessToken`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -136,7 +168,7 @@ async function placeOrder(
   scripCode: number,
   quantity: number,
 ) {
-  const resp = await fetch(`${FIVEPAISA_BASE}/V1/OrderRequest`, {
+  const resp = await fetchWithRetry(`${FIVEPAISA_BASE}/V1/OrderRequest`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
