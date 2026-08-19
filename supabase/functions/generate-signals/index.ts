@@ -789,6 +789,7 @@ interface AssetIndicator {
   lastClose: number;
   stSignal: ScoreResult;
   ltSignal: ScoreResult;
+  stRegime: MarketRegime;
   signalRows: { short_term: string; long_term: string };
 }
 
@@ -1035,6 +1036,18 @@ async function executeStrategies(
       const accuracy = accuracyMap.get(`${assetId}:${signalTerm}`);
       if (accuracy && accuracy.sampleSize >= MIN_SAMPLE_FOR_TRUST && accuracy.winRate < MIN_ACCEPTABLE_WIN_RATE) {
         skipped.push(`${ind.asset.symbol}: self-learning filter — this asset's ${signalTerm} signals have only a ${accuracy.winRate.toFixed(0)}% win rate over ${accuracy.sampleSize} tested signals, below the ${MIN_ACCEPTABLE_WIN_RATE}% trust threshold`);
+        continue;
+      }
+
+      // Ranging-market hard block: dampening confidence alone still let
+      // strong-looking signals slip through and open trades right before
+      // getting stopped out by ordinary chop — this was the direct cause of
+      // the repeated small-loss BNB whipsaws observed over the last couple
+      // of days. Short-term (momentum) entries are the ones this actually
+      // hurts, so block those outright in a detected range instead of just
+      // trusting a lowered confidence score to fall below threshold.
+      if (signalTerm === "short_term" && ind.stRegime === "ranging") {
+        skipped.push(`${ind.asset.symbol}: ranging market (EMA9/21 bunched) — short-term entries blocked until a real trend forms`);
         continue;
       }
 
@@ -1451,6 +1464,7 @@ Deno.serve(async (req: Request) => {
         lastClose: ind.lastClose,
         stSignal: st,
         ltSignal: lt,
+        stRegime: regime,
         signalRows: { short_term: "", long_term: "" },
       });
       const stSig = inserted.find((s) => s.signal_term === "short_term");
