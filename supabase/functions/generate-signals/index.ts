@@ -79,17 +79,25 @@ function smaAt(values: number[], period: number, endIdx: number): number | null 
   return sum / period;
 }
 
-type MarketRegime = "trending" | "ranging" | "unknown";
+type MarketRegime = "trending" | "mild_range" | "tight_range" | "unknown";
 
 // A lightweight regime read using only EMA9/21 spread (needs far less history
 // than SMA50/200, so it's usable almost immediately on a new asset). Wide EMA
-// separation relative to price = trending; EMAs bunched together = ranging/
-// choppy, which is exactly the condition that produced the BNB whipsaw
-// losses observed earlier — dampening confidence there directly targets that.
+// separation relative to price = trending; EMAs bunched together = ranging.
+//
+// Three tiers, not two — an earlier binary version (>0.4% trending, else
+// ranging) turned out to classify most normal crypto short-term action as
+// "ranging" and, combined with a hard block, stopped short-term trading
+// almost entirely for a full day. Only genuinely flat/tight chop (the
+// condition that actually produced the BNB whipsaw losses) should hard
+// block; ordinary mild consolidation should just get a confidence haircut
+// like before.
 function detectRegime(ind: { ema9: number | null; ema21: number | null; lastClose: number }): MarketRegime {
   if (ind.ema9 === null || ind.ema21 === null || ind.lastClose <= 0) return "unknown";
   const spreadPct = (Math.abs(ind.ema9 - ind.ema21) / ind.lastClose) * 100;
-  return spreadPct > 0.4 ? "trending" : "ranging";
+  if (spreadPct > 0.4) return "trending";
+  if (spreadPct > 0.12) return "mild_range";
+  return "tight_range";
 }
 
 function ema(values: number[], period: number): number | null {
@@ -1039,15 +1047,17 @@ async function executeStrategies(
         continue;
       }
 
-      // Ranging-market hard block: dampening confidence alone still let
+      // Tight-range hard block: dampening confidence alone still let
       // strong-looking signals slip through and open trades right before
-      // getting stopped out by ordinary chop — this was the direct cause of
-      // the repeated small-loss BNB whipsaws observed over the last couple
-      // of days. Short-term (momentum) entries are the ones this actually
-      // hurts, so block those outright in a detected range instead of just
-      // trusting a lowered confidence score to fall below threshold.
-      if (signalTerm === "short_term" && ind.stRegime === "ranging") {
-        skipped.push(`${ind.asset.symbol}: ranging market (EMA9/21 bunched) — short-term entries blocked until a real trend forms`);
+      // getting stopped out by ordinary chop — that was the direct cause of
+      // the repeated small-loss BNB whipsaws observed earlier. This only
+      // blocks genuinely flat/tight consolidation (EMA9/21 spread < 0.12% of
+      // price); mild consolidation still trades, just at reduced confidence
+      // — an earlier version of this block used a much wider "ranging"
+      // definition that caught ordinary short-term action too and stopped
+      // short-term trading almost entirely, which wasn't the intent.
+      if (signalTerm === "short_term" && ind.stRegime === "tight_range") {
+        skipped.push(`${ind.asset.symbol}: tightly ranging market (EMA9/21 bunched) — short-term entries blocked until a real trend forms`);
         continue;
       }
 
@@ -1388,12 +1398,15 @@ Deno.serve(async (req: Request) => {
       // Regime dampening: EMAs bunched together (ranging/choppy) is exactly
       // the condition that produced repeated small-loss whipsaws earlier —
       // trust momentum signals less when the market isn't actually trending.
+      // Mild consolidation gets a lighter haircut; only genuinely flat/tight
+      // chop gets the harder one (see the hard block below for that case).
       const regime = detectRegime(ind);
-      if (regime === "ranging" && st.signal_type !== "hold") {
+      if ((regime === "mild_range" || regime === "tight_range") && st.signal_type !== "hold") {
+        const factor = regime === "tight_range" ? 0.6 : 0.85;
         st = {
           ...st,
-          confidence_score: Math.round(st.confidence_score * 0.75),
-          reasoning_text: `${st.reasoning_text}. Ranging market (EMA9/21 bunched) — confidence reduced`,
+          confidence_score: Math.round(st.confidence_score * factor),
+          reasoning_text: `${st.reasoning_text}. ${regime === "tight_range" ? "Tightly ranging" : "Mildly ranging"} market (EMA9/21 bunched) — confidence reduced`,
         };
       }
 
