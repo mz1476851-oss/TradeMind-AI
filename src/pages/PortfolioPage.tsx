@@ -152,6 +152,33 @@ export function PortfolioPage() {
     load();
   }, [load]);
 
+  // Live updates: trade opens/closes and new portfolio snapshots (taken
+  // periodically by the pipeline) now refresh the analytics, chart, and
+  // open-positions list here automatically.
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel('portfolio-page-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trades', filter: `user_id=eq.${user.id}` },
+        () => {
+          load();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'portfolio_snapshots', filter: `user_id=eq.${user.id}` },
+        () => {
+          load();
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, load]);
+
   const fmt = (n: number) =>
     n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 

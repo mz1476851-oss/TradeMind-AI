@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Activity, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Activity, CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface PipelineRun {
   id: string;
@@ -50,6 +50,7 @@ function summaryLine(run: PipelineRun): string {
 export function SystemHealthCard() {
   const [runs, setRuns] = useState<Record<string, PipelineRun | null>>({});
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const jobs = ['fetch_market_data', 'generate_signals', 'check_open_trades'];
@@ -130,6 +131,41 @@ export function SystemHealthCard() {
                       Running later than expected — check back shortly.
                     </p>
                   )}
+                  {jobName === 'generate_signals' &&
+                    run &&
+                    run.status === 'success' &&
+                    Number(run.summary?.trades_created ?? 0) === 0 &&
+                    Array.isArray(run.summary?.skip_reasons_sample) &&
+                    (run.summary!.skip_reasons_sample as string[]).length > 0 && (
+                      <div className="mt-1.5">
+                        <button
+                          onClick={() => setExpanded(expanded === jobName ? null : jobName)}
+                          className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300"
+                        >
+                          Why no trades this run?
+                          {expanded === jobName ? (
+                            <ChevronUp className="w-3 h-3" />
+                          ) : (
+                            <ChevronDown className="w-3 h-3" />
+                          )}
+                        </button>
+                        {expanded === jobName && (
+                          <ul className="mt-1.5 space-y-1 bg-slate-800/40 rounded-lg p-2.5">
+                            {(run.summary!.skip_reasons_sample as string[]).map((reason, i) => (
+                              <li key={i} className="text-[11px] text-slate-400 leading-relaxed">
+                                • {reason}
+                              </li>
+                            ))}
+                            {Number(run.summary?.skip_reasons_total ?? 0) >
+                              (run.summary!.skip_reasons_sample as string[]).length && (
+                              <li className="text-[11px] text-slate-500 italic">
+                                +{Number(run.summary!.skip_reasons_total) - (run.summary!.skip_reasons_sample as string[]).length} more
+                              </li>
+                            )}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                 </div>
               </div>
             );

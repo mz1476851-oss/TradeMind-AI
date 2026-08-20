@@ -85,6 +85,26 @@ export function TradeHistoryPage() {
     load();
   }, [load]);
 
+  // Live updates: a new trade opening, closing, or its P&L ticking as price
+  // moves now shows up here immediately instead of only after switching
+  // tabs or refreshing — matches the same live pattern used on Dashboard.
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel('trade-history-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trades', filter: `user_id=eq.${user.id}` },
+        () => {
+          load();
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, load]);
+
   const fmt = (n: number | null) =>
     n !== null
       ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })

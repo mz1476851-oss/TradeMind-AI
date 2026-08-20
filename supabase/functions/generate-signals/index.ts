@@ -1492,6 +1492,14 @@ Deno.serve(async (req: Request) => {
     const executionResults = await executeStrategies(supabase, indicators, signalsByAsset);
 
     const totalTradesCreated = executionResults.reduce((sum, r) => sum + r.trades_created, 0);
+    // Surface *why* nothing traded, not just that nothing traded — this was
+    // previously only visible in the function's HTTP response, which the
+    // cron trigger doesn't persist anywhere, so a day of "signals generated,
+    // 0 trades" gave no visibility into whether that was expected (real
+    // chop) or a bug. Capped to keep the summary small; skipped reasons are
+    // the same message repeated per asset per strategy, so a handful is
+    // enough to diagnose from.
+    const allSkipReasons = executionResults.flatMap((r) => r.skipped);
     try {
       await supabase.from("pipeline_runs").insert({
         job_name: "generate_signals",
@@ -1501,6 +1509,8 @@ Deno.serve(async (req: Request) => {
           trades_created: totalTradesCreated,
           strategies_run: executionResults.length,
           errors: errors.length > 0 ? errors : undefined,
+          skip_reasons_sample: allSkipReasons.slice(0, 8),
+          skip_reasons_total: allSkipReasons.length,
         },
       });
     } catch {

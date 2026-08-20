@@ -338,6 +338,25 @@ export function SignalsPage() {
     loadSignals();
   }, [loadSignals]);
 
+  // Live updates: new signal batches (every ~10 min) and trade status
+  // changes (approve/reject/auto-execute) now reflect immediately instead
+  // of needing a manual refresh — this was the main thing that made the
+  // page feel frozen even while the pipeline was actually running.
+  useEffect(() => {
+    const channel = supabase
+      .channel('signals-page-live')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'signals' }, () => {
+        loadSignals();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => {
+        loadSignals();
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadSignals]);
+
   const approveTrade = async (trade: Trade) => {
     await supabase
       .from('trades')
